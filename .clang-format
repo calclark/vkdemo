@@ -1,0 +1,25 @@
+---
+BasedOnStyle: Chromium
+AlignAfterOpenBracket: AlwaysBreak
+AlignConsecutiveMacros: 'false'
+AlignConsecutiveAssignments: 'false'
+AlignConsecutiveDeclarations: 'false'
+AlignEscapedNewlines: DontAlign
+AlignOperands: 'false'
+AlignTrailingComments: 'false'
+AllowAllArgumentsOnNextLine: 'false'
+AllowShortBlocksOnASingleLine: 'false'
+AllowShortFunctionsOnASingleLine: None
+BinPackArguments: 'false'
+BinPackParameters: 'false'
+BreakBeforeBraces: Linux
+Cpp11BracedListStyle: 'true'
+IncludeBlocks: Regroup
+InsertTrailingCommas: Wrapped
+PointerAlignment: Left
+ReflowComments: 'false'
+QualifierAlignment: 'Right'
+SortIncludes: CaseInsensitive
+TabWidth: '2'
+UseTab: ForContinuationAndIndentation
+...
