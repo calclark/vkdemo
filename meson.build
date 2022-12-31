@@ -28,7 +28,9 @@ sources = [
   'src/main.cpp',
 ]
 
+cmake = import('cmake')
 dependencies = [
+  cmake.subproject('fmt').dependency('fmt')
 ]
 
 out = executable(
