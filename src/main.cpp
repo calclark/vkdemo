@@ -8,6 +8,7 @@
 #include <vulkan/vulkan.hpp>
 
 using fmt::print;
+using std::terminate;
 
 // NOLINTNEXTLINE
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -22,6 +23,7 @@ auto main() -> int
 	auto [result, instance] = vk::createInstanceUnique({});
 	if (result != vk::Result::eSuccess) {
 		print(stderr, "Failed to create instance\n");
+		terminate();
 	};
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
