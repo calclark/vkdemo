@@ -5,6 +5,7 @@
 #include <fmt/core.h>
 
 #include <exception>
+#include <utility>
 #include <vulkan/vulkan.hpp>
 
 using fmt::print;
@@ -13,6 +14,21 @@ using std::terminate;
 // NOLINTNEXTLINE
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
+auto fail(char const* message = "") -> void
+{
+	print(stderr, "FATAL: {}\n", message);
+	terminate();
+}
+
+template <typename T>
+auto check(vk::ResultValue<T> result, char const* message = "") -> T
+{
+	if (result.result != vk::Result::eSuccess) {
+		fail(message);
+	}
+	return std::move(result.value);
+}
+
 auto main() -> int
 {
 	vk::DynamicLoader loader;
@@ -20,11 +36,9 @@ auto main() -> int
 			loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
-	auto [result, instance] = vk::createInstanceUnique({});
-	if (result != vk::Result::eSuccess) {
-		print(stderr, "Failed to create instance\n");
-		terminate();
-	};
+	auto instance = check(
+			vk::createInstanceUnique({}),
+			"Failed to create a vulkan instance.");
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
 	print("Hello, world!\n");
