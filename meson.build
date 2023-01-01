@@ -30,7 +30,8 @@ sources = [
 
 cmake = import('cmake')
 dependencies = [
-  cmake.subproject('fmt').dependency('fmt')
+  cmake.subproject('fmt').dependency('fmt'),
+  cmake.subproject('Vulkan-Headers').dependency('Vulkan-Headers'),
 ]
 
 out = executable(
