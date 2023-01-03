@@ -6,17 +6,25 @@
 #include <fmt/core.h>
 #include <GLFW/glfw3.h>
 
+#include <array>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <span>
 #include <utility>
 #include <vulkan/vulkan.hpp>
 
 using fmt::print;
+using std::array;
+using std::span;
 using std::terminate;
 
 auto const window_width = 800;
 auto const window_height = 600;
 auto const application_name = "vkdemo";
+auto const validation_layers =
+		array<char const*, 1>{"VK_LAYER_KHRONOS_validation"};
 
 // NOLINTNEXTLINE
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -62,11 +70,17 @@ class Application
 	{
 		init_glfw();
 		init_window();
+		init_vulkan();
 		cleanup();
 	}
 
+	Application(bool enable_layers) : _layers_enabled{enable_layers} {};
+
  private:
-	GLFWwindow* _window;
+	bool _layers_enabled;
+	GLFWwindow* _window = nullptr;
+	vk::DynamicLoader _loader{};
+	vk::UniqueInstance _instance;
 
 	auto init_glfw() -> void
 	{
@@ -94,25 +108,62 @@ class Application
 		glfwSetWindowUserPointer(_window, this);
 	}
 
+	auto init_vulkan() -> void
+	{
+		init_loader();
+		create_instance();
+	}
+
+	auto init_loader() -> void
+	{
+		auto vkGetInstanceProcAddr =
+				_loader.getProcAddress<PFN_vkGetInstanceProcAddr>(
+						"vkGetInstanceProcAddr");
+		VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+	}
+
+	auto create_instance() -> void
+	{
+		auto app_info = vk::ApplicationInfo{
+				.pApplicationName = application_name,
+				.applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+				.pEngineName = "no engine",
+				.engineVersion = VK_MAKE_VERSION(0, 0, 0),
+				.apiVersion = VK_API_VERSION_1_3,
+		};
+		auto count = uint32_t{};
+		auto* extensions = glfwGetRequiredInstanceExtensions(&count);
+		auto instance_ci = vk::InstanceCreateInfo{
+				.pApplicationInfo = &app_info,
+				.enabledLayerCount = _layers_enabled
+						? static_cast<uint32_t>(validation_layers.size())
+						: 0,
+				.ppEnabledLayerNames = validation_layers.data(),
+				.enabledExtensionCount = count,
+				.ppEnabledExtensionNames = extensions,
+		};
+		_instance = check(
+				vk::createInstanceUnique(instance_ci),
+				"Failed to create a vulkan instance.");
+		VULKAN_HPP_DEFAULT_DISPATCHER.init(*_instance);
+	}
+
 	auto cleanup() -> void
 	{
 		glfwTerminate();
 	}
 };
 
-auto main() -> int
+auto main(int argc, char** argv) -> int
 {
-	auto loader = vk::DynamicLoader{};
-	auto vkGetInstanceProcAddr =
-			loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-	VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
-	auto instance = check(
-			vk::createInstanceUnique(vk::InstanceCreateInfo{}),
-			"Failed to create a vulkan instance.");
-	VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
-
-	auto app = Application{};
+	auto args = span(argv, static_cast<size_t>(argc));
+	auto enable_layers = true;
+	for (auto& arg : args) {
+		if (strcmp(arg, "--disable-layers") == 0) {
+			enable_layers = false;
+		}
+	}
+	auto app = Application{enable_layers};
 	app.run();
 	return EXIT_SUCCESS;
 }
