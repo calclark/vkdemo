@@ -13,12 +13,14 @@
 #include <exception>
 #include <span>
 #include <utility>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 
 using fmt::print;
 using std::array;
 using std::span;
 using std::terminate;
+using std::vector;
 
 auto const window_width = 800;
 auto const window_height = 600;
@@ -133,12 +135,11 @@ class Application
 		};
 		auto count = uint32_t{};
 		auto* extensions = glfwGetRequiredInstanceExtensions(&count);
+		auto layers = supported_layers();
 		auto instance_ci = vk::InstanceCreateInfo{
 				.pApplicationInfo = &app_info,
-				.enabledLayerCount = _layers_enabled
-						? static_cast<uint32_t>(validation_layers.size())
-						: 0,
-				.ppEnabledLayerNames = validation_layers.data(),
+				.enabledLayerCount = static_cast<uint32_t>(layers.size()),
+				.ppEnabledLayerNames = layers.data(),
 				.enabledExtensionCount = count,
 				.ppEnabledExtensionNames = extensions,
 		};
@@ -146,6 +147,31 @@ class Application
 				vk::createInstanceUnique(instance_ci),
 				"Failed to create a vulkan instance.");
 		VULKAN_HPP_DEFAULT_DISPATCHER.init(*_instance);
+	}
+
+	[[nodiscard]] auto supported_layers() const -> vector<char const*>
+	{
+		auto supported_layers = vector<char const*>();
+		if (!_layers_enabled) {
+			return supported_layers;
+		}
+		auto properties = check(vk::enumerateInstanceLayerProperties());
+		for (auto const* layer : validation_layers) {
+			auto layer_found = false;
+			for (auto& property : properties) {
+				if (strcmp(layer, property.layerName) == 0) {
+					supported_layers.emplace_back(layer);
+					layer_found = true;
+				}
+			}
+			if (!layer_found) {
+				print(
+						stderr,
+						"WARNING: Requested validation layer not found: {}\n",
+						layer);
+			}
+		}
+		return supported_layers;
 	}
 
 	auto cleanup() -> void
