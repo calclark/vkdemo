@@ -24,6 +24,7 @@ else
   extra_args = []
 endif
 
+subdir('shaders')
 sources = [
   'src/main.cpp',
 ]
@@ -50,7 +51,4 @@ out = executable(
   dependencies: dependencies,
   cpp_args: extra_args,
 )
-
-run_target('run', command: out)
-run_target('r', command: out)
 
