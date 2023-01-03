@@ -29,9 +29,19 @@ sources = [
 ]
 
 cmake = import('cmake')
+glfw_opts = cmake.subproject_options()
+glfw_opts.add_cmake_defines({
+  'BUILD_SHARED_LIBS': false,
+  'GLFW_BUILD_EXAMPLES': false,
+  'GLFW_BUILD_TESTS': false,
+  'GLFW_BUILD_DOCS': false,
+  'GLFW_VULKAN_STATIC': false,
+})
+
 dependencies = [
   cmake.subproject('fmt').dependency('fmt'),
   cmake.subproject('Vulkan-Headers').dependency('Vulkan-Headers'),
+  cmake.subproject('glfw', options: glfw_opts).dependency('glfw'),
 ]
 
 out = executable(
