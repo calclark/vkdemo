@@ -7,6 +7,7 @@
 #include <fmt/core.h>
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 
 using fmt::print;
 using std::array;
+using std::clamp;
 using std::move;
 using std::optional;
 using std::span;
@@ -123,6 +125,10 @@ class Application
 	vk::UniqueDevice _device;
 	vk::Queue _graphics_queue;
 	vk::Queue _present_queue;
+	vk::UniqueSwapchainKHR _swapchain;
+	vector<vk::Image> _swapchain_images;
+	vk::Format _swapchain_image_format{vk::Format::eUndefined};
+	vk::Extent2D _swapchain_extent;
 
 	auto init_glfw() -> void
 	{
@@ -157,6 +163,7 @@ class Application
 		create_surface();
 		pick_physical_device();
 		create_logical_device();
+		create_swapchain();
 	}
 
 	auto init_loader() -> void
@@ -359,6 +366,82 @@ class Application
 				_device->getQueue(_queue_familes.graphics_family.value(), 0);
 		_present_queue =
 				_device->getQueue(_queue_familes.present_family.value(), 0);
+	}
+
+	auto create_swapchain() -> void
+	{
+		auto format = choose_swapchain_surface_format(_swapchain_details.formats);
+		auto present_mode = vk::PresentModeKHR::eFifo;
+		auto extent = choose_swapchain_extent(_swapchain_details.capabilities);
+		auto min_image_count = _swapchain_details.capabilities.minImageCount;
+		auto max_image_count = _swapchain_details.capabilities.maxImageCount;
+		max_image_count =
+				max_image_count == 0 ? min_image_count + 1 : max_image_count;
+		auto image_count = uint32_t{2};
+		image_count = clamp(image_count, min_image_count, max_image_count);
+		auto indices = array<uint32_t, 2>{
+				_queue_familes.graphics_family.value(),
+				_queue_familes.present_family.value()};
+		auto same_family =
+				_queue_familes.graphics_family == _queue_familes.present_family;
+		auto swapchain_ci = vk::SwapchainCreateInfoKHR{
+				.surface = _surface.get(),
+				.minImageCount = image_count,
+				.imageFormat = format.format,
+				.imageColorSpace = format.colorSpace,
+				.imageExtent = extent,
+				.imageArrayLayers = 1,
+				.imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+				.imageSharingMode = same_family ? vk::SharingMode::eExclusive
+																				: vk::SharingMode::eConcurrent,
+				.queueFamilyIndexCount = indices.size(),
+				.pQueueFamilyIndices = indices.data(),
+				.preTransform = _swapchain_details.capabilities.currentTransform,
+				.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+				.presentMode = present_mode,
+				.clipped = VK_TRUE,
+				.oldSwapchain = VK_NULL_HANDLE,
+		};
+		_swapchain = check(
+				_device->createSwapchainKHRUnique(swapchain_ci),
+				"Failed to create a swapchain.");
+		_swapchain_images = check(_device->getSwapchainImagesKHR(_swapchain.get()));
+		_swapchain_image_format = format.format;
+		_swapchain_extent = extent;
+	}
+
+	auto choose_swapchain_surface_format(span<vk::SurfaceFormatKHR> formats)
+			-> vk::SurfaceFormatKHR
+	{
+		for (auto const& format : formats) {
+			if (format.format == vk::Format::eB8G8R8A8Srgb &&
+					format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+				return format;
+			}
+		}
+		return formats[0];
+	}
+
+	auto choose_swapchain_extent(vk::SurfaceCapabilitiesKHR const& capabilities)
+			-> vk::Extent2D
+	{
+		if (capabilities.currentExtent != vk::Extent2D{0xFFFFFFFF, 0xFFFFFFFF}) {
+			return capabilities.currentExtent;
+		}
+		auto width = int{};
+		auto height = int{};
+		glfwGetFramebufferSize(_window, &width, &height);
+		auto extent = vk::Extent2D{
+				.width = clamp(
+						static_cast<uint32_t>(width),
+						capabilities.minImageExtent.width,
+						capabilities.maxImageExtent.width),
+				.height = clamp(
+						static_cast<uint32_t>(height),
+						capabilities.minImageExtent.height,
+						capabilities.maxImageExtent.height),
+		};
+		return extent;
 	}
 
 	auto cleanup() -> void
