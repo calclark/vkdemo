@@ -18,6 +18,7 @@
 
 using fmt::print;
 using std::array;
+using std::move;
 using std::span;
 using std::terminate;
 using std::vector;
@@ -43,7 +44,7 @@ auto check(vk::ResultValue<T> result, char const* message = "") -> T
 	if (result.result != vk::Result::eSuccess) {
 		fail(message);
 	}
-	return std::move(result.value);
+	return move(result.value);
 }
 
 auto glfw_error_callback(int error_code, char const* description) -> void
@@ -87,7 +88,7 @@ class Application
 	auto init_glfw() -> void
 	{
 		glfwSetErrorCallback(glfw_error_callback);
-		if (glfwInit() != GLFW_TRUE) {
+		if (glfwInit() == GLFW_FALSE) {
 			fail("Failed to initialize GLFW.");
 		}
 		if (glfwVulkanSupported() == GLFW_FALSE) {
