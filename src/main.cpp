@@ -1,4 +1,5 @@
 #define GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_VULKAN
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -47,6 +48,13 @@ auto check(vk::ResultValue<T> result, char const* message = "") -> T
 	return move(result.value);
 }
 
+auto check(VkResult const& status, char const* message = "") -> void
+{
+	if (status != VK_SUCCESS) {
+		fail(message);
+	}
+}
+
 auto glfw_error_callback(int error_code, char const* description) -> void
 {
 	print(stderr, "GLFW error {:#80X}: {}\n", error_code, description);
@@ -84,6 +92,7 @@ class Application
 	GLFWwindow* _window = nullptr;
 	vk::DynamicLoader _loader{};
 	vk::UniqueInstance _instance;
+	vk::UniqueSurfaceKHR _surface;
 
 	auto init_glfw() -> void
 	{
@@ -115,6 +124,7 @@ class Application
 	{
 		init_loader();
 		create_instance();
+		create_surface();
 	}
 
 	auto init_loader() -> void
@@ -173,6 +183,15 @@ class Application
 			}
 		}
 		return supported_layers;
+	}
+
+	auto create_surface() -> void
+	{
+		auto* surface = VkSurfaceKHR{};
+		check(
+				glfwCreateWindowSurface(_instance.get(), _window, nullptr, &surface),
+				"Failed to create a surface.");
+		_surface = vk::UniqueSurfaceKHR(surface, _instance.get());
 	}
 
 	auto cleanup() -> void
