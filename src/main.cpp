@@ -130,6 +130,7 @@ class Application
 	vk::Format _swapchain_image_format{vk::Format::eUndefined};
 	vk::Extent2D _swapchain_extent;
 	vector<vk::UniqueImageView> _image_views;
+	vk::UniqueRenderPass _render_pass;
 
 	auto init_glfw() -> void
 	{
@@ -166,6 +167,7 @@ class Application
 		create_logical_device();
 		create_swapchain();
 		create_image_views();
+		create_render_pass();
 	}
 
 	auto init_loader() -> void
@@ -474,6 +476,55 @@ class Application
 					_device->createImageViewUnique(view_ci),
 					"Failed to create an image view.");
 		}
+	}
+
+	auto create_render_pass() -> void
+	{
+		auto color_attachment = vk::AttachmentDescription{
+				.format = _swapchain_image_format,
+				.samples = vk::SampleCountFlagBits::e1,
+				.loadOp = vk::AttachmentLoadOp::eClear,
+				.storeOp = vk::AttachmentStoreOp::eStore,
+				.stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+				.stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+				.initialLayout = vk::ImageLayout::eUndefined,
+				.finalLayout = vk::ImageLayout::ePresentSrcKHR,
+		};
+		auto color_ref = vk::AttachmentReference{
+				.attachment = 0,
+				.layout = vk::ImageLayout::eColorAttachmentOptimal,
+		};
+		auto subpass = vk::SubpassDescription{
+				.pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+				.inputAttachmentCount = 0,
+				.pInputAttachments = VK_NULL_HANDLE,
+				.colorAttachmentCount = 1,
+				.pColorAttachments = &color_ref,
+				.pResolveAttachments = VK_NULL_HANDLE,
+				.pDepthStencilAttachment = VK_NULL_HANDLE,
+				.preserveAttachmentCount = 0,
+				.pPreserveAttachments = VK_NULL_HANDLE,
+		};
+		auto dependency = vk::SubpassDependency{
+				.srcSubpass = VK_SUBPASS_EXTERNAL,
+				.dstSubpass = 0,
+				.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				.srcAccessMask = vk::AccessFlagBits::eNone,
+				.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+				.dependencyFlags = {},
+		};
+		auto render_pass_ci = vk::RenderPassCreateInfo{
+				.attachmentCount = 1,
+				.pAttachments = &color_attachment,
+				.subpassCount = 1,
+				.pSubpasses = &subpass,
+				.dependencyCount = 1,
+				.pDependencies = &dependency,
+		};
+		_render_pass = check(
+				_device->createRenderPassUnique(render_pass_ci),
+				"Failed to create a render pass.");
 	}
 
 	auto cleanup() -> void
