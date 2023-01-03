@@ -31,13 +31,13 @@ auto check(vk::ResultValue<T> result, char const* message = "") -> T
 
 auto main() -> int
 {
-	vk::DynamicLoader loader;
+	auto loader = vk::DynamicLoader{};
 	auto vkGetInstanceProcAddr =
 			loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
 	auto instance = check(
-			vk::createInstanceUnique({}),
+			vk::createInstanceUnique(vk::InstanceCreateInfo{}),
 			"Failed to create a vulkan instance.");
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
