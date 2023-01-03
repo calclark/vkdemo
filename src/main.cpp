@@ -120,6 +120,9 @@ class Application
 	vk::PhysicalDevice _physical_device;
 	QueueFamilyIndices _queue_familes;
 	SwapChainSupportDetails _swapchain_details;
+	vk::UniqueDevice _device;
+	vk::Queue _graphics_queue;
+	vk::Queue _present_queue;
 
 	auto init_glfw() -> void
 	{
@@ -153,6 +156,7 @@ class Application
 		create_instance();
 		create_surface();
 		pick_physical_device();
+		create_logical_device();
 	}
 
 	auto init_loader() -> void
@@ -318,6 +322,43 @@ class Application
 	auto swapchain_adequate(SwapChainSupportDetails const& details) -> bool
 	{
 		return !(details.formats.empty() && details.present_modes.empty());
+	}
+
+	auto create_logical_device() -> void
+	{
+		auto queue_priority = 1.0f;
+		auto queue_cis = array<vk::DeviceQueueCreateInfo, 2>{
+				vk::DeviceQueueCreateInfo{
+						.queueFamilyIndex = _queue_familes.graphics_family.value(),
+						.queueCount = 1,
+						.pQueuePriorities = &queue_priority,
+				},
+				vk::DeviceQueueCreateInfo{
+						.queueFamilyIndex = _queue_familes.present_family.value(),
+						.queueCount = 1,
+						.pQueuePriorities = &queue_priority,
+				},
+		};
+		auto device_ci = vk::DeviceCreateInfo{
+				.queueCreateInfoCount =
+						_queue_familes.graphics_family == _queue_familes.present_family
+						? uint32_t{1}
+						: uint32_t{2},
+				.pQueueCreateInfos = queue_cis.data(),
+				.enabledLayerCount = 0,
+				.ppEnabledLayerNames = VK_NULL_HANDLE,
+				.enabledExtensionCount = device_extensions.size(),
+				.ppEnabledExtensionNames = device_extensions.data(),
+				.pEnabledFeatures = VK_NULL_HANDLE,
+		};
+		_device = check(
+				_physical_device.createDeviceUnique(device_ci),
+				"Failed to create a logical device.");
+		VULKAN_HPP_DEFAULT_DISPATCHER.init(_device.get());
+		_graphics_queue =
+				_device->getQueue(_queue_familes.graphics_family.value(), 0);
+		_present_queue =
+				_device->getQueue(_queue_familes.present_family.value(), 0);
 	}
 
 	auto cleanup() -> void
