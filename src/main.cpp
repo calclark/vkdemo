@@ -129,6 +129,7 @@ class Application
 	vector<vk::Image> _swapchain_images;
 	vk::Format _swapchain_image_format{vk::Format::eUndefined};
 	vk::Extent2D _swapchain_extent;
+	vector<vk::UniqueImageView> _image_views;
 
 	auto init_glfw() -> void
 	{
@@ -164,6 +165,7 @@ class Application
 		pick_physical_device();
 		create_logical_device();
 		create_swapchain();
+		create_image_views();
 	}
 
 	auto init_loader() -> void
@@ -442,6 +444,36 @@ class Application
 						capabilities.maxImageExtent.height),
 		};
 		return extent;
+	}
+
+	auto create_image_views() -> void
+	{
+		_image_views.resize(_swapchain_images.size());
+		for (auto i = size_t{}; i < _swapchain_images.size(); ++i) {
+			auto view_ci = vk::ImageViewCreateInfo{
+					.image = _swapchain_images[i],
+					.viewType = vk::ImageViewType::e2D,
+					.format = _swapchain_image_format,
+					.components =
+							vk::ComponentMapping{
+									.r = vk::ComponentSwizzle::eIdentity,
+									.g = vk::ComponentSwizzle::eIdentity,
+									.b = vk::ComponentSwizzle::eIdentity,
+									.a = vk::ComponentSwizzle::eIdentity,
+							},
+					.subresourceRange =
+							vk::ImageSubresourceRange{
+									.aspectMask = vk::ImageAspectFlagBits::eColor,
+									.baseMipLevel = 0,
+									.levelCount = 1,
+									.baseArrayLayer = 0,
+									.layerCount = 1,
+							},
+			};
+			_image_views[i] = check(
+					_device->createImageViewUnique(view_ci),
+					"Failed to create an image view.");
+		}
 	}
 
 	auto cleanup() -> void
