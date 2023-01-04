@@ -148,6 +148,7 @@ class Application
 	vk::UniqueRenderPass _render_pass;
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
+	vector<vk::UniqueFramebuffer> _framebuffers;
 
 	auto init_glfw() -> void
 	{
@@ -186,6 +187,7 @@ class Application
 		create_image_views();
 		create_render_pass();
 		create_graphics_pipeline();
+		create_framebuffers();
 	}
 
 	auto init_loader() -> void
@@ -692,6 +694,24 @@ class Application
 				_device->createShaderModuleUnique(module_ci),
 				"Failed to create shader module.");
 		return module;
+	}
+
+	auto create_framebuffers() -> void
+	{
+		_framebuffers.resize(_image_views.size());
+		for (auto i = size_t{}; i < _image_views.size(); ++i) {
+			auto framebuffer_ci = vk::FramebufferCreateInfo{
+					.renderPass = _render_pass.get(),
+					.attachmentCount = 1,
+					.pAttachments = &_image_views[i].get(),
+					.width = _swapchain_extent.width,
+					.height = _swapchain_extent.height,
+					.layers = 1,
+			};
+			_framebuffers[i] = check(
+					_device->createFramebufferUnique(framebuffer_ci),
+					"Failed to create a framebuffer.");
+		}
 	}
 
 	auto cleanup() -> void
