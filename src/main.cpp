@@ -796,8 +796,17 @@ class Application
 
 	auto loop() -> void
 	{
+		auto base_time = glfwGetTime();
+		auto frame_count = 0;
 		while (glfwWindowShouldClose(_window) == GLFW_FALSE) {
-			glfwWaitEvents();
+			frame_count += 1;
+			auto curr_time = glfwGetTime();
+			if (curr_time > base_time + 1) {
+				print("FPS: {}\n", frame_count);
+				base_time = curr_time;
+				frame_count = 0;
+			}
+			glfwPollEvents();
 			draw_frame();
 		}
 		check(_device->waitIdle());
