@@ -36,6 +36,7 @@ using std::filesystem::path;
 auto const window_width = 800;
 auto const window_height = 600;
 auto const application_name = "vkdemo";
+auto const max_frames_in_flight = 2;
 auto const validation_layers =
 		array<char const*, 1>{"VK_LAYER_KHRONOS_validation"};
 auto const device_extensions =
@@ -193,6 +194,7 @@ class Application
 	vector<vk::UniqueSemaphore> _image_locks;
 	vector<vk::UniqueSemaphore> _render_locks;
 	vector<vk::UniqueFence> _in_flight_locks;
+	uint32_t current_frame = 0;
 
 	auto init_window() -> void
 	{
@@ -221,7 +223,7 @@ class Application
 		create_graphics_pipeline();
 		create_framebuffers();
 		create_command_pool();
-		create_command_buffer();
+		create_command_buffers();
 		create_sync_objects();
 	}
 
@@ -760,12 +762,12 @@ class Application
 				"Failed to create a command pool.");
 	}
 
-	auto create_command_buffer() -> void
+	auto create_command_buffers() -> void
 	{
 		auto command_buffer_ai = vk::CommandBufferAllocateInfo{
 				.commandPool = _command_pool.get(),
 				.level = vk::CommandBufferLevel::ePrimary,
-				.commandBufferCount = 1,
+				.commandBufferCount = max_frames_in_flight,
 		};
 		_command_buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
@@ -778,10 +780,10 @@ class Application
 		auto fence_ci = vk::FenceCreateInfo{
 				.flags = vk::FenceCreateFlagBits::eSignaled,
 		};
-		_image_locks.resize(1);
-		_render_locks.resize(1);
-		_in_flight_locks.resize(1);
-		for (auto i = size_t{}; i < 1; ++i) {
+		_image_locks.resize(max_frames_in_flight);
+		_render_locks.resize(max_frames_in_flight);
+		_in_flight_locks.resize(max_frames_in_flight);
+		for (auto i = size_t{}; i < max_frames_in_flight; ++i) {
 			_image_locks[i] = check(
 					_device->createSemaphoreUnique(semaphore_ci),
 					"Failed to create an image semaphore.");
@@ -814,20 +816,24 @@ class Application
 
 	auto draw_frame() -> void
 	{
-		check(
-				_device->waitForFences(_in_flight_locks[0].get(), VK_TRUE, UINT64_MAX));
+		check(_device->waitForFences(
+				_in_flight_locks[current_frame].get(),
+				VK_TRUE,
+				UINT64_MAX));
 		auto image_index = check(
 				_device->acquireNextImageKHR(
 						_swapchain.get(),
 						UINT64_MAX,
-						_image_locks[0].get(),
+						_image_locks[current_frame].get(),
 						VK_NULL_HANDLE),
 				"Failed to acquire next image.");
-		check(_device->resetFences(1, &_in_flight_locks[0].get()));
-		check(_command_buffers[0]->reset());
-		record_command_buffer(_command_buffers[0].get(), image_index);
-		auto signal_semaphores = array<vk::Semaphore, 1>{_render_locks[0].get()};
-		auto wait_semaphores = array<vk::Semaphore, 1>{_image_locks[0].get()};
+		check(_device->resetFences(1, &_in_flight_locks[current_frame].get()));
+		check(_command_buffers[current_frame]->reset());
+		record_command_buffer(_command_buffers[current_frame].get(), image_index);
+		auto signal_semaphores =
+				array<vk::Semaphore, 1>{_render_locks[current_frame].get()};
+		auto wait_semaphores =
+				array<vk::Semaphore, 1>{_image_locks[current_frame].get()};
 		auto wait_staged = array<vk::PipelineStageFlags, 1>{
 				vk::PipelineStageFlagBits::eColorAttachmentOutput};
 		auto submit_info = vk::SubmitInfo{
@@ -835,12 +841,13 @@ class Application
 				.pWaitSemaphores = wait_semaphores.data(),
 				.pWaitDstStageMask = wait_staged.data(),
 				.commandBufferCount = 1,
-				.pCommandBuffers = &_command_buffers[0].get(),
+				.pCommandBuffers = &_command_buffers[current_frame].get(),
 				.signalSemaphoreCount = signal_semaphores.size(),
 				.pSignalSemaphores = signal_semaphores.data(),
 		};
 		check(
-				_graphics_queue.submit(1, &submit_info, _in_flight_locks[0].get()),
+				_graphics_queue
+						.submit(1, &submit_info, _in_flight_locks[current_frame].get()),
 				"Failed to submit a draw command buffer.");
 		auto swapchains = array<vk::SwapchainKHR, 1>{_swapchain.get()};
 		auto present_info = vk::PresentInfoKHR{
@@ -852,6 +859,7 @@ class Application
 				.pResults = VK_NULL_HANDLE,
 		};
 		check(_present_queue.presentKHR(present_info));
+		current_frame = (current_frame + 1) % max_frames_in_flight;
 	}
 
 	auto record_command_buffer(
