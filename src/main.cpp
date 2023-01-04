@@ -66,6 +66,13 @@ auto check(VkResult const& status, char const* message = "") -> void
 	}
 }
 
+auto check(vk::Result const& status, char const* message = "") -> void
+{
+	if (status != vk::Result::eSuccess) {
+		fail(message);
+	}
+}
+
 auto glfw_error_callback(int error_code, char const* description) -> void
 {
 	print(stderr, "GLFW error {:#80X}: {}\n", error_code, description);
@@ -123,6 +130,7 @@ class Application
 		init_glfw();
 		init_window();
 		init_vulkan();
+		loop();
 		cleanup();
 	}
 
@@ -170,7 +178,6 @@ class Application
 	{
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 		_window = glfwCreateWindow(
 				window_width,
 				window_height,
@@ -765,6 +772,88 @@ class Application
 					_device->createFenceUnique(fence_ci),
 					"Failed to create a frame fence.");
 		}
+	}
+
+	auto loop() -> void
+	{
+		while (glfwWindowShouldClose(_window) == GLFW_FALSE) {
+			glfwWaitEvents();
+			draw_frame();
+		}
+		check(_device->waitIdle());
+	}
+
+	auto draw_frame() -> void
+	{
+		check(
+				_device->waitForFences(_in_flight_locks[0].get(), VK_TRUE, UINT64_MAX));
+		auto image_index = check(
+				_device->acquireNextImageKHR(
+						_swapchain.get(),
+						UINT64_MAX,
+						_image_locks[0].get(),
+						VK_NULL_HANDLE),
+				"Failed to acquire next image.");
+		check(_device->resetFences(1, &_in_flight_locks[0].get()));
+		check(_command_buffers[0]->reset());
+		record_command_buffer(_command_buffers[0].get(), image_index);
+		auto signal_semaphores = array<vk::Semaphore, 1>{_render_locks[0].get()};
+		auto wait_semaphores = array<vk::Semaphore, 1>{_image_locks[0].get()};
+		auto wait_staged = array<vk::PipelineStageFlags, 1>{
+				vk::PipelineStageFlagBits::eColorAttachmentOutput};
+		auto submit_info = vk::SubmitInfo{
+				.waitSemaphoreCount = wait_semaphores.size(),
+				.pWaitSemaphores = wait_semaphores.data(),
+				.pWaitDstStageMask = wait_staged.data(),
+				.commandBufferCount = 1,
+				.pCommandBuffers = &_command_buffers[0].get(),
+				.signalSemaphoreCount = signal_semaphores.size(),
+				.pSignalSemaphores = signal_semaphores.data(),
+		};
+		check(
+				_graphics_queue.submit(1, &submit_info, _in_flight_locks[0].get()),
+				"Failed to submit a draw command buffer.");
+		auto swapchains = array<vk::SwapchainKHR, 1>{_swapchain.get()};
+		auto present_info = vk::PresentInfoKHR{
+				.waitSemaphoreCount = signal_semaphores.size(),
+				.pWaitSemaphores = signal_semaphores.data(),
+				.swapchainCount = swapchains.size(),
+				.pSwapchains = swapchains.data(),
+				.pImageIndices = &image_index,
+				.pResults = VK_NULL_HANDLE,
+		};
+		check(_present_queue.presentKHR(present_info));
+	}
+
+	auto record_command_buffer(
+			vk::CommandBuffer const& buffer,
+			uint32_t image_index) -> void
+	{
+		auto command_buffer_bi = vk::CommandBufferBeginInfo{
+				.pInheritanceInfo = VK_NULL_HANDLE,
+		};
+		check(
+				buffer.begin(command_buffer_bi),
+				"Failed to begin recording a command buffer.");
+		auto clear_value = vk::ClearValue{{array<float, 4>{0.0, 0.0, 0.0, 1.0}}};
+		auto render_pass_bi = vk::RenderPassBeginInfo{
+				.renderPass = _render_pass.get(),
+				.framebuffer = _framebuffers[image_index].get(),
+				.renderArea =
+						vk::Rect2D{
+								.offset = {0, 0},
+								.extent = _swapchain_extent,
+						},
+				.clearValueCount = 1,
+				.pClearValues = &clear_value,
+		};
+		buffer.beginRenderPass(render_pass_bi, vk::SubpassContents::eInline);
+		buffer.bindPipeline(
+				vk::PipelineBindPoint::eGraphics,
+				_graphics_pipeline.get());
+		buffer.draw(3, 1, 0, 0);
+		buffer.endRenderPass();
+		check(buffer.end(), "Failed to record a command buffer.");
 	}
 
 	auto cleanup() -> void
