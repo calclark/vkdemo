@@ -151,6 +151,9 @@ class Application
 	vector<vk::UniqueFramebuffer> _framebuffers;
 	vk::UniqueCommandPool _command_pool;
 	vector<vk::UniqueCommandBuffer> _command_buffers;
+	vector<vk::UniqueSemaphore> _image_locks;
+	vector<vk::UniqueSemaphore> _render_locks;
+	vector<vk::UniqueFence> _in_flight_locks;
 
 	auto init_glfw() -> void
 	{
@@ -192,6 +195,7 @@ class Application
 		create_framebuffers();
 		create_command_pool();
 		create_command_buffer();
+		create_sync_objects();
 	}
 
 	auto init_loader() -> void
@@ -739,6 +743,28 @@ class Application
 		_command_buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
 				"Failed to allocate command buffers.");
+	}
+
+	auto create_sync_objects() -> void
+	{
+		auto semaphore_ci = vk::SemaphoreCreateInfo{};
+		auto fence_ci = vk::FenceCreateInfo{
+				.flags = vk::FenceCreateFlagBits::eSignaled,
+		};
+		_image_locks.resize(1);
+		_render_locks.resize(1);
+		_in_flight_locks.resize(1);
+		for (auto i = size_t{}; i < 1; ++i) {
+			_image_locks[i] = check(
+					_device->createSemaphoreUnique(semaphore_ci),
+					"Failed to create an image semaphore.");
+			_render_locks[i] = check(
+					_device->createSemaphoreUnique(semaphore_ci),
+					"Failed to create an image semaphore.");
+			_in_flight_locks[i] = check(
+					_device->createFenceUnique(fence_ci),
+					"Failed to create a frame fence.");
+		}
 	}
 
 	auto cleanup() -> void
