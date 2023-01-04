@@ -13,6 +13,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <utility>
@@ -22,11 +24,14 @@
 using fmt::print;
 using std::array;
 using std::clamp;
+using std::ifstream;
+using std::ios;
 using std::move;
 using std::optional;
 using std::span;
 using std::terminate;
 using std::vector;
+using std::filesystem::path;
 
 auto const window_width = 800;
 auto const window_height = 600;
@@ -80,6 +85,16 @@ void glfw_key_callback(
 	}
 }
 
+auto read_file(path const& file_name) -> vector<char>
+{
+	auto file = ifstream(file_name, ios::ate | ios::binary);
+	auto file_size = file.tellg();
+	auto buffer = vector<char>(file_size);
+	file.seekg(0);
+	file.read(buffer.data(), file_size);
+	return buffer;
+}
+
 class QueueFamilyIndices
 {
  public:
@@ -131,6 +146,8 @@ class Application
 	vk::Extent2D _swapchain_extent;
 	vector<vk::UniqueImageView> _image_views;
 	vk::UniqueRenderPass _render_pass;
+	vk::UniquePipelineLayout _pipeline_layout;
+	vk::UniquePipeline _graphics_pipeline;
 
 	auto init_glfw() -> void
 	{
@@ -168,6 +185,7 @@ class Application
 		create_swapchain();
 		create_image_views();
 		create_render_pass();
+		create_graphics_pipeline();
 	}
 
 	auto init_loader() -> void
@@ -525,6 +543,155 @@ class Application
 		_render_pass = check(
 				_device->createRenderPassUnique(render_pass_ci),
 				"Failed to create a render pass.");
+	}
+
+	auto create_graphics_pipeline() -> void
+	{
+		auto vert_shader_code = read_file("shaders/shader.vert.spv");
+		auto frag_shader_code = read_file("shaders/shader.frag.spv");
+		auto vert_shader_module = create_shader_module(vert_shader_code);
+		auto frag_shader_module = create_shader_module(frag_shader_code);
+		auto shader_stages = array<vk::PipelineShaderStageCreateInfo, 2>{
+				create_pipeline_shader_info(
+						vert_shader_module.get(),
+						vk::ShaderStageFlagBits::eVertex),
+				create_pipeline_shader_info(
+						frag_shader_module.get(),
+						vk::ShaderStageFlagBits::eFragment)};
+
+		auto vertex_input_ci = vk::PipelineVertexInputStateCreateInfo{
+				.vertexBindingDescriptionCount = 0,
+				.pVertexBindingDescriptions = VK_NULL_HANDLE,
+				.vertexAttributeDescriptionCount = 0,
+				.pVertexAttributeDescriptions = VK_NULL_HANDLE,
+		};
+
+		auto input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo{
+				.topology = vk::PrimitiveTopology::eTriangleList,
+				.primitiveRestartEnable = VK_FALSE,
+		};
+
+		auto viewport = vk::Viewport{
+				.x = 0,
+				.y = 0,
+				.width = static_cast<float>(_swapchain_extent.width),
+				.height = static_cast<float>(_swapchain_extent.height),
+				.minDepth = 0,
+				.maxDepth = 1,
+		};
+		auto scissor = vk::Rect2D{
+				.offset =
+						vk::Offset2D{
+								.x = 0,
+								.y = 0,
+						},
+				.extent = _swapchain_extent,
+		};
+		auto viewport_ci = vk::PipelineViewportStateCreateInfo{
+				.viewportCount = 1,
+				.pViewports = &viewport,
+				.scissorCount = 1,
+				.pScissors = &scissor,
+		};
+
+		auto rasterizer_ci = vk::PipelineRasterizationStateCreateInfo{
+				.depthClampEnable = VK_FALSE,
+				.rasterizerDiscardEnable = VK_FALSE,
+				.polygonMode = vk::PolygonMode::eFill,
+				.cullMode = vk::CullModeFlagBits::eBack,
+				.frontFace = vk::FrontFace::eClockwise,
+				.depthBiasEnable = VK_FALSE,
+				.depthBiasConstantFactor = 0,
+				.depthBiasClamp = 0,
+				.depthBiasSlopeFactor = 0,
+				.lineWidth = 1.0,
+		};
+
+		auto multisample_ci = vk::PipelineMultisampleStateCreateInfo{
+				.rasterizationSamples = vk::SampleCountFlagBits::e1,
+				.sampleShadingEnable = VK_FALSE,
+				.minSampleShading = 0,
+				.pSampleMask = VK_NULL_HANDLE,
+				.alphaToCoverageEnable = VK_FALSE,
+				.alphaToOneEnable = VK_FALSE,
+		};
+
+		auto color_blend_attachment = vk::PipelineColorBlendAttachmentState{
+				.blendEnable = VK_FALSE,
+				.srcColorBlendFactor = vk::BlendFactor::eZero,
+				.dstColorBlendFactor = vk::BlendFactor::eZero,
+				.colorBlendOp = vk::BlendOp::eAdd,
+				.srcAlphaBlendFactor = vk::BlendFactor::eZero,
+				.dstAlphaBlendFactor = vk::BlendFactor::eZero,
+				.alphaBlendOp = vk::BlendOp::eAdd,
+				.colorWriteMask = vk::ColorComponentFlagBits::eR |
+						vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+						vk::ColorComponentFlagBits::eA,
+		};
+		auto color_blend_ci = vk::PipelineColorBlendStateCreateInfo{
+				.logicOpEnable = VK_FALSE,
+				.logicOp = vk::LogicOp::eClear,
+				.attachmentCount = 1,
+				.pAttachments = &color_blend_attachment,
+				.blendConstants = array<float, 4>{0, 0, 0, 0},
+		};
+
+		auto pipeline_layout_ci = vk::PipelineLayoutCreateInfo{
+				.setLayoutCount = 0,
+				.pSetLayouts = VK_NULL_HANDLE,
+				.pushConstantRangeCount = 0,
+				.pPushConstantRanges = VK_NULL_HANDLE,
+		};
+		_pipeline_layout = check(
+				_device->createPipelineLayoutUnique(pipeline_layout_ci),
+				"Failed to create a pipeline layout.");
+
+		auto pipeline_ci = vk::GraphicsPipelineCreateInfo{
+				.stageCount = 2,
+				.pStages = shader_stages.data(),
+				.pVertexInputState = &vertex_input_ci,
+				.pInputAssemblyState = &input_assembly_ci,
+				.pTessellationState = VK_NULL_HANDLE,
+				.pViewportState = &viewport_ci,
+				.pRasterizationState = &rasterizer_ci,
+				.pMultisampleState = &multisample_ci,
+				.pDepthStencilState = nullptr,
+				.pColorBlendState = &color_blend_ci,
+				.pDynamicState = nullptr,
+				.layout = _pipeline_layout.get(),
+				.renderPass = _render_pass.get(),
+				.subpass = 0,
+				.basePipelineHandle = VK_NULL_HANDLE,
+				.basePipelineIndex = 0,
+		};
+		_graphics_pipeline = check(
+				_device->createGraphicsPipelineUnique(nullptr, pipeline_ci),
+				"Failed to create a graphics pipeline.");
+	}
+
+	auto create_pipeline_shader_info(
+			vk::ShaderModule const& module,
+			vk::ShaderStageFlagBits const& stage) -> vk::PipelineShaderStageCreateInfo
+	{
+		auto stage_ci = vk::PipelineShaderStageCreateInfo{
+				.stage = stage,
+				.module = module,
+				.pName = "main",
+				.pSpecializationInfo = VK_NULL_HANDLE,
+		};
+		return stage_ci;
+	}
+
+	auto create_shader_module(span<char> code) -> vk::UniqueShaderModule
+	{
+		auto module_ci = vk::ShaderModuleCreateInfo{
+				.codeSize = code.size_bytes(),
+				.pCode = reinterpret_cast<uint32_t*>(code.data()),
+		};
+		auto module = check(
+				_device->createShaderModuleUnique(module_ci),
+				"Failed to create shader module.");
+		return module;
 	}
 
 	auto cleanup() -> void
