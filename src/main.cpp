@@ -149,6 +149,8 @@ class Application
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
 	vector<vk::UniqueFramebuffer> _framebuffers;
+	vk::UniqueCommandPool _command_pool;
+	vector<vk::UniqueCommandBuffer> _command_buffers;
 
 	auto init_glfw() -> void
 	{
@@ -188,6 +190,8 @@ class Application
 		create_render_pass();
 		create_graphics_pipeline();
 		create_framebuffers();
+		create_command_pool();
+		create_command_buffer();
 	}
 
 	auto init_loader() -> void
@@ -712,6 +716,29 @@ class Application
 					_device->createFramebufferUnique(framebuffer_ci),
 					"Failed to create a framebuffer.");
 		}
+	}
+
+	auto create_command_pool() -> void
+	{
+		auto pool_ci = vk::CommandPoolCreateInfo{
+				.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				.queueFamilyIndex = _queue_familes.graphics_family.value(),
+		};
+		_command_pool = check(
+				_device->createCommandPoolUnique(pool_ci),
+				"Failed to create a command pool.");
+	}
+
+	auto create_command_buffer() -> void
+	{
+		auto command_buffer_ai = vk::CommandBufferAllocateInfo{
+				.commandPool = _command_pool.get(),
+				.level = vk::CommandBufferLevel::ePrimary,
+				.commandBufferCount = 1,
+		};
+		_command_buffers = check(
+				_device->allocateCommandBuffersUnique(command_buffer_ai),
+				"Failed to allocate command buffers.");
 	}
 
 	auto cleanup() -> void
