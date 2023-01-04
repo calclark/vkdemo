@@ -122,22 +122,53 @@ class SwapChainSupportDetails
 	vector<vk::PresentModeKHR> present_modes;
 };
 
+class GLFWWrapper
+{
+ public:
+	static auto instance() -> GLFWWrapper&
+	{
+		static auto instance = GLFWWrapper{};
+		return instance;
+	}
+
+	GLFWWrapper(GLFWWrapper const&) = delete;
+	GLFWWrapper(GLFWWrapper&&) = delete;
+	auto operator=(GLFWWrapper const&) -> GLFWWrapper& = delete;
+	auto operator=(GLFWWrapper&&) -> GLFWWrapper& = delete;
+
+ private:
+	GLFWWrapper()
+	{
+		glfwSetErrorCallback(glfw_error_callback);
+		if (glfwInit() == GLFW_FALSE) {
+			fail("Failed to initialize GLFW.");
+		}
+		if (glfwVulkanSupported() == GLFW_FALSE) {
+			fail("Vulkan is not supported by the installed graphics drivers.");
+		}
+	};
+
+	~GLFWWrapper()
+	{
+		glfwTerminate();
+	};
+};
+
 class Application
 {
  public:
 	void run()
 	{
-		init_glfw();
 		init_window();
 		init_vulkan();
 		loop();
-		cleanup();
 	}
 
 	Application(bool enable_layers) : _layers_enabled{enable_layers} {};
 
  private:
 	bool _layers_enabled;
+	GLFWWrapper& _glfw = GLFWWrapper::instance();
 	GLFWwindow* _window = nullptr;
 	vk::DynamicLoader _loader{};
 	vk::UniqueInstance _instance;
@@ -162,17 +193,6 @@ class Application
 	vector<vk::UniqueSemaphore> _image_locks;
 	vector<vk::UniqueSemaphore> _render_locks;
 	vector<vk::UniqueFence> _in_flight_locks;
-
-	auto init_glfw() -> void
-	{
-		glfwSetErrorCallback(glfw_error_callback);
-		if (glfwInit() == GLFW_FALSE) {
-			fail("Failed to initialize GLFW.");
-		}
-		if (glfwVulkanSupported() == GLFW_FALSE) {
-			fail("Vulkan is not supported by the installed graphics drivers.");
-		}
-	}
 
 	auto init_window() -> void
 	{
@@ -854,11 +874,6 @@ class Application
 		buffer.draw(3, 1, 0, 0);
 		buffer.endRenderPass();
 		check(buffer.end(), "Failed to record a command buffer.");
-	}
-
-	auto cleanup() -> void
-	{
-		glfwTerminate();
 	}
 };
 
