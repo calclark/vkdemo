@@ -185,10 +185,8 @@ class Application
 	vk::Format _swapchain_image_format{vk::Format::eUndefined};
 	vk::Extent2D _swapchain_extent;
 	vector<vk::UniqueImageView> _image_views;
-	vk::UniqueRenderPass _render_pass;
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
-	vector<vk::UniqueFramebuffer> _framebuffers;
 	vk::UniqueCommandPool _command_pool;
 	vector<vk::UniqueCommandBuffer> _command_buffers;
 	vector<vk::UniqueSemaphore> _image_locks;
@@ -219,9 +217,7 @@ class Application
 		create_logical_device();
 		create_swapchain();
 		create_image_views();
-		create_render_pass();
 		create_graphics_pipeline();
-		create_framebuffers();
 		create_command_pool();
 		create_command_buffers();
 		create_sync_objects();
@@ -407,20 +403,27 @@ class Application
 						.pQueuePriorities = &queue_priority,
 				},
 		};
-		auto device_ci = vk::DeviceCreateInfo{
-				.queueCreateInfoCount =
-						_queue_familes.graphics_family == _queue_familes.present_family
-						? uint32_t{1}
-						: uint32_t{2},
-				.pQueueCreateInfos = queue_cis.data(),
-				.enabledLayerCount = 0,
-				.ppEnabledLayerNames = VK_NULL_HANDLE,
-				.enabledExtensionCount = device_extensions.size(),
-				.ppEnabledExtensionNames = device_extensions.data(),
-				.pEnabledFeatures = VK_NULL_HANDLE,
+		auto device_ci = vk::StructureChain<
+				vk::DeviceCreateInfo,
+				vk::PhysicalDeviceDynamicRenderingFeatures>{
+				vk::DeviceCreateInfo{
+						.queueCreateInfoCount =
+								_queue_familes.graphics_family == _queue_familes.present_family
+								? uint32_t{1}
+								: uint32_t{2},
+						.pQueueCreateInfos = queue_cis.data(),
+						.enabledLayerCount = 0,
+						.ppEnabledLayerNames = VK_NULL_HANDLE,
+						.enabledExtensionCount = device_extensions.size(),
+						.ppEnabledExtensionNames = device_extensions.data(),
+						.pEnabledFeatures = VK_NULL_HANDLE,
+				},
+				vk::PhysicalDeviceDynamicRenderingFeatures{
+						.dynamicRendering = VK_TRUE,
+				},
 		};
 		_device = check(
-				_physical_device.createDeviceUnique(device_ci),
+				_physical_device.createDeviceUnique(device_ci.get()),
 				"Failed to create a logical device.");
 		VULKAN_HPP_DEFAULT_DISPATCHER.init(_device.get());
 		_graphics_queue =
@@ -535,55 +538,6 @@ class Application
 		}
 	}
 
-	auto create_render_pass() -> void
-	{
-		auto color_attachment = vk::AttachmentDescription{
-				.format = _swapchain_image_format,
-				.samples = vk::SampleCountFlagBits::e1,
-				.loadOp = vk::AttachmentLoadOp::eClear,
-				.storeOp = vk::AttachmentStoreOp::eStore,
-				.stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
-				.stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-				.initialLayout = vk::ImageLayout::eUndefined,
-				.finalLayout = vk::ImageLayout::ePresentSrcKHR,
-		};
-		auto color_ref = vk::AttachmentReference{
-				.attachment = 0,
-				.layout = vk::ImageLayout::eColorAttachmentOptimal,
-		};
-		auto subpass = vk::SubpassDescription{
-				.pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
-				.inputAttachmentCount = 0,
-				.pInputAttachments = VK_NULL_HANDLE,
-				.colorAttachmentCount = 1,
-				.pColorAttachments = &color_ref,
-				.pResolveAttachments = VK_NULL_HANDLE,
-				.pDepthStencilAttachment = VK_NULL_HANDLE,
-				.preserveAttachmentCount = 0,
-				.pPreserveAttachments = VK_NULL_HANDLE,
-		};
-		auto dependency = vk::SubpassDependency{
-				.srcSubpass = VK_SUBPASS_EXTERNAL,
-				.dstSubpass = 0,
-				.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
-				.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
-				.srcAccessMask = vk::AccessFlagBits::eNone,
-				.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-				.dependencyFlags = {},
-		};
-		auto render_pass_ci = vk::RenderPassCreateInfo{
-				.attachmentCount = 1,
-				.pAttachments = &color_attachment,
-				.subpassCount = 1,
-				.pSubpasses = &subpass,
-				.dependencyCount = 1,
-				.pDependencies = &dependency,
-		};
-		_render_pass = check(
-				_device->createRenderPassUnique(render_pass_ci),
-				"Failed to create a render pass.");
-	}
-
 	auto create_graphics_pipeline() -> void
 	{
 		auto vert_shader_code = read_file("shaders/shader.vert.spv");
@@ -685,26 +639,37 @@ class Application
 				_device->createPipelineLayoutUnique(pipeline_layout_ci),
 				"Failed to create a pipeline layout.");
 
-		auto pipeline_ci = vk::GraphicsPipelineCreateInfo{
-				.stageCount = 2,
-				.pStages = shader_stages.data(),
-				.pVertexInputState = &vertex_input_ci,
-				.pInputAssemblyState = &input_assembly_ci,
-				.pTessellationState = VK_NULL_HANDLE,
-				.pViewportState = &viewport_ci,
-				.pRasterizationState = &rasterizer_ci,
-				.pMultisampleState = &multisample_ci,
-				.pDepthStencilState = nullptr,
-				.pColorBlendState = &color_blend_ci,
-				.pDynamicState = nullptr,
-				.layout = _pipeline_layout.get(),
-				.renderPass = _render_pass.get(),
-				.subpass = 0,
-				.basePipelineHandle = VK_NULL_HANDLE,
-				.basePipelineIndex = 0,
+		auto pipeline_ci = vk::StructureChain<
+				vk::GraphicsPipelineCreateInfo,
+				vk::PipelineRenderingCreateInfoKHR>{
+				vk::GraphicsPipelineCreateInfo{
+						.stageCount = 2,
+						.pStages = shader_stages.data(),
+						.pVertexInputState = &vertex_input_ci,
+						.pInputAssemblyState = &input_assembly_ci,
+						.pTessellationState = VK_NULL_HANDLE,
+						.pViewportState = &viewport_ci,
+						.pRasterizationState = &rasterizer_ci,
+						.pMultisampleState = &multisample_ci,
+						.pDepthStencilState = nullptr,
+						.pColorBlendState = &color_blend_ci,
+						.pDynamicState = nullptr,
+						.layout = _pipeline_layout.get(),
+						.renderPass = VK_NULL_HANDLE,
+						.subpass = 0,
+						.basePipelineHandle = VK_NULL_HANDLE,
+						.basePipelineIndex = 0,
+				},
+				vk::PipelineRenderingCreateInfo{
+						.viewMask = 0,
+						.colorAttachmentCount = 1,
+						.pColorAttachmentFormats = &_swapchain_image_format,
+						.depthAttachmentFormat = {},
+						.stencilAttachmentFormat = {},
+				},
 		};
 		_graphics_pipeline = check(
-				_device->createGraphicsPipelineUnique(nullptr, pipeline_ci),
+				_device->createGraphicsPipelineUnique(nullptr, pipeline_ci.get()),
 				"Failed to create a graphics pipeline.");
 	}
 
@@ -731,24 +696,6 @@ class Application
 				_device->createShaderModuleUnique(module_ci),
 				"Failed to create shader module.");
 		return module;
-	}
-
-	auto create_framebuffers() -> void
-	{
-		_framebuffers.resize(_image_views.size());
-		for (auto i = size_t{}; i < _image_views.size(); ++i) {
-			auto framebuffer_ci = vk::FramebufferCreateInfo{
-					.renderPass = _render_pass.get(),
-					.attachmentCount = 1,
-					.pAttachments = &_image_views[i].get(),
-					.width = _swapchain_extent.width,
-					.height = _swapchain_extent.height,
-					.layers = 1,
-			};
-			_framebuffers[i] = check(
-					_device->createFramebufferUnique(framebuffer_ci),
-					"Failed to create a framebuffer.");
-		}
 	}
 
 	auto create_command_pool() -> void
@@ -869,27 +816,91 @@ class Application
 		auto command_buffer_bi = vk::CommandBufferBeginInfo{
 				.pInheritanceInfo = VK_NULL_HANDLE,
 		};
-		check(
-				buffer.begin(command_buffer_bi),
-				"Failed to begin recording a command buffer.");
-		auto clear_value = vk::ClearValue{{array<float, 4>{0.0, 0.0, 0.0, 1.0}}};
-		auto render_pass_bi = vk::RenderPassBeginInfo{
-				.renderPass = _render_pass.get(),
-				.framebuffer = _framebuffers[image_index].get(),
+		auto color_attachment = vk::RenderingAttachmentInfo{
+				.imageView = _image_views[image_index].get(),
+				.imageLayout = vk::ImageLayout::eAttachmentOptimal,
+				.resolveMode = vk::ResolveModeFlagBits::eNone,
+				.resolveImageLayout = vk::ImageLayout::eUndefined,
+				.loadOp = vk::AttachmentLoadOp::eClear,
+				.storeOp = vk::AttachmentStoreOp::eStore,
+				.clearValue = vk::ClearValue{{array<float, 4>{0.0, 0.0, 0.0, 1.0}}},
+		};
+		auto render_info = vk::RenderingInfo{
 				.renderArea =
 						vk::Rect2D{
 								.offset = {0, 0},
 								.extent = _swapchain_extent,
 						},
-				.clearValueCount = 1,
-				.pClearValues = &clear_value,
+				.layerCount = 1,
+				.viewMask = 0,
+				.colorAttachmentCount = 1,
+				.pColorAttachments = &color_attachment,
+				.pDepthAttachment = {},
+				.pStencilAttachment = {},
 		};
-		buffer.beginRenderPass(render_pass_bi, vk::SubpassContents::eInline);
+		auto foo = vk::ImageMemoryBarrier{
+				.srcAccessMask = vk::AccessFlagBits::eNone,
+				.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+				.oldLayout = vk::ImageLayout::eUndefined,
+				.newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+				.srcQueueFamilyIndex = {},
+				.dstQueueFamilyIndex = {},
+				.image = _swapchain_images[image_index],
+				.subresourceRange =
+						vk::ImageSubresourceRange{
+								.aspectMask = vk::ImageAspectFlagBits::eColor,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+						},
+		};
+		auto bar = vk::ImageMemoryBarrier{
+				.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+				.dstAccessMask = vk::AccessFlagBits::eNone,
+				.oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+				.newLayout = vk::ImageLayout::ePresentSrcKHR,
+				.srcQueueFamilyIndex = {},
+				.dstQueueFamilyIndex = {},
+				.image = _swapchain_images[image_index],
+				.subresourceRange =
+						vk::ImageSubresourceRange{
+								.aspectMask = vk::ImageAspectFlagBits::eColor,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+						},
+		};
+		check(
+				buffer.begin(command_buffer_bi),
+				"Failed to begin recording a command buffer.");
+		buffer.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				vk::DependencyFlagBits{},
+				0,
+				nullptr,
+				0,
+				nullptr,
+				1,
+				&foo);
+		buffer.beginRendering(&render_info);
 		buffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
 				_graphics_pipeline.get());
 		buffer.draw(3, 1, 0, 0);
-		buffer.endRenderPass();
+		buffer.endRendering();
+		buffer.pipelineBarrier(
+				vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				vk::PipelineStageFlagBits::eBottomOfPipe,
+				vk::DependencyFlagBits{},
+				0,
+				nullptr,
+				0,
+				nullptr,
+				1,
+				&bar);
 		check(buffer.end(), "Failed to record a command buffer.");
 	}
 };
