@@ -31,7 +31,6 @@ using std::array;
 using std::clamp;
 using std::ifstream;
 using std::ios;
-using std::move;
 using std::optional;
 using std::span;
 using std::terminate;
@@ -61,7 +60,7 @@ auto check(vk::ResultValue<T> result, char const* message = "") -> T
 	if (result.result != vk::Result::eSuccess) {
 		fail(message);
 	}
-	return move(result.value);
+	return std::move(result.value);
 }
 
 auto check(VkResult const& status, char const* message = "") -> void
@@ -225,10 +224,12 @@ class Application
 		loop();
 	}
 
-	Application(bool enable_layers) : _layers_enabled{enable_layers} {};
+	Application(bool enable_layers, vk::PresentModeKHR present_mode)
+			: _layers_enabled{enable_layers}, _present_mode{present_mode} {};
 
  private:
 	bool _layers_enabled;
+	vk::PresentModeKHR _present_mode;
 	GLFWWrapper& _glfw = GLFWWrapper::instance();
 	GLFWwindow* _window = nullptr;
 	vk::DynamicLoader _loader{};
@@ -253,7 +254,7 @@ class Application
 	BufferMemory _vertex_buffer;
 	BufferMemory _index_buffer;
 	BufferMemory _uniform_buffer;
-	void* _uniform_data;
+	void* _uniform_data{};
 	vk::UniqueDescriptorPool _descriptor_pool;
 	vk::DescriptorSet _descriptor_set;
 	vk::UniqueSemaphore _image_free;
@@ -507,13 +508,7 @@ class Application
 	auto create_swapchain() -> void
 	{
 		auto format = choose_swapchain_surface_format(_swapchain_details.formats);
-		auto present_mode = vk::PresentModeKHR::eMailbox;
 		auto extent = choose_swapchain_extent(_swapchain_details.capabilities);
-		auto min_image_count = _swapchain_details.capabilities.minImageCount;
-		auto max_image_count = _swapchain_details.capabilities.maxImageCount;
-		max_image_count = max_image_count == 0 ? UINT32_MAX : max_image_count;
-		auto image_count = uint32_t{2};
-		image_count = clamp(image_count, min_image_count, max_image_count);
 		auto indices = array<uint32_t, 2>{
 				_queue_familes.graphics_family.value(),
 				_queue_familes.present_family.value()};
@@ -521,7 +516,7 @@ class Application
 				_queue_familes.graphics_family == _queue_familes.present_family;
 		auto swapchain_ci = vk::SwapchainCreateInfoKHR{
 				.surface = _surface.get(),
-				.minImageCount = image_count,
+				.minImageCount = _swapchain_details.capabilities.minImageCount,
 				.imageFormat = format.format,
 				.imageColorSpace = format.colorSpace,
 				.imageExtent = extent,
@@ -533,7 +528,7 @@ class Application
 				.pQueueFamilyIndices = indices.data(),
 				.preTransform = _swapchain_details.capabilities.currentTransform,
 				.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-				.presentMode = present_mode,
+				.presentMode = _present_mode,
 				.clipped = VK_TRUE,
 				.oldSwapchain = VK_NULL_HANDLE,
 		};
@@ -810,7 +805,7 @@ class Application
 		auto buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
 				"Failed to allocate command buffers.");
-		_command_buffer = move(buffers[0]);
+		_command_buffer = std::move(buffers[0]);
 	}
 
 	auto create_vertex_buffer() -> void
@@ -986,7 +981,7 @@ class Application
 		auto sets = check(
 				_device->allocateDescriptorSets(alloc_info),
 				"Failed to allocate descriptor sets.");
-		_descriptor_set = move(sets[0]);
+		_descriptor_set = sets[0];
 		auto buffer_info = vk::DescriptorBufferInfo{
 				.buffer = _uniform_buffer.buffer.get(),
 				.offset = 0,
@@ -1087,11 +1082,11 @@ class Application
 	{
 		static auto start = glfwGetTime();
 		auto now = glfwGetTime();
-		auto time = now - start;
+		auto time = static_cast<float>(now - start);
 		auto ubo = UniformBufferObject{
 				.model = glm::rotate(
 						glm::mat4{1.0f},
-						(float)time * glm::radians(90.0f),
+						time * glm::radians(90.0f),
 						glm::vec3{0.0f, 0.0f, 1.0f}),
 				.view = glm::lookAt(
 						glm::vec3{2.0f, 2.0f, 2.0f},
@@ -1099,7 +1094,8 @@ class Application
 						glm::vec3{0.0f, 0.0f, 1.0f}),
 				.proj = glm::perspective(
 						glm::radians(45.0f),
-						(float)_swapchain_extent.width / _swapchain_extent.height,
+						static_cast<float>(_swapchain_extent.width) /
+								static_cast<float>(_swapchain_extent.height),
 						0.1f,
 						10.0f),
 		};
@@ -1220,12 +1216,16 @@ auto main(int argc, char** argv) -> int
 {
 	auto args = span(argv, static_cast<size_t>(argc));
 	auto enable_layers = true;
+	auto present_mode = vk::PresentModeKHR::eFifo;
 	for (auto& arg : args) {
 		if (strcmp(arg, "--disable-layers") == 0) {
 			enable_layers = false;
 		}
+		if (strcmp(arg, "--mailbox") == 0) {
+			present_mode = vk::PresentModeKHR::eMailbox;
+		}
 	}
-	auto app = Application{enable_layers};
+	auto app = Application{enable_layers, present_mode};
 	app.run();
 	return EXIT_SUCCESS;
 }

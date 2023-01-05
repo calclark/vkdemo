@@ -7,7 +7,9 @@ Checks: "
   performance-*,
   portability-*,
   readability-*,
+  -cppcoreguidelines-avoid-magic-numbers,
   -readability-convert-member-functions-to-static,
+  -readability-magic-numbers,
   -readability-uppercase-literal-suffix"
 CheckOptions:
   - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
