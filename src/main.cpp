@@ -1,5 +1,8 @@
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+#define GLM_FORCE_EXPLICIT_CTOR
+#define GLM_FORCE_MESSAGES
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -15,6 +18,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <glm/ext.hpp>
 #include <glm/glm.hpp>
 #include <optional>
 #include <span>
@@ -173,6 +177,12 @@ class BufferMemory
 	vk::UniqueDeviceMemory memory;
 };
 
+struct UniformBufferObject {
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
+};
+
 class GLFWWrapper
 {
  public:
@@ -235,12 +245,17 @@ class Application
 	vk::Format _swapchain_image_format{vk::Format::eUndefined};
 	vk::Extent2D _swapchain_extent;
 	vector<vk::UniqueImageView> _image_views;
+	vk::UniqueDescriptorSetLayout _descriptor_set_layout;
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
 	vk::UniqueCommandBuffer _command_buffer;
 	BufferMemory _vertex_buffer;
 	BufferMemory _index_buffer;
+	BufferMemory _uniform_buffer;
+	void* _uniform_data;
+	vk::UniqueDescriptorPool _descriptor_pool;
+	vk::DescriptorSet _descriptor_set;
 	vk::UniqueSemaphore _image_free;
 	vk::UniqueSemaphore _render_done_sem;
 	vk::UniqueFence _render_done_fence;
@@ -268,11 +283,15 @@ class Application
 		create_logical_device();
 		create_swapchain();
 		create_image_views();
+		create_descriptor_set_layout();
 		create_graphics_pipeline();
 		create_command_pool();
 		create_command_buffers();
 		create_vertex_buffer();
 		create_index_buffer();
+		create_uniform_buffer();
+		create_descriptor_pool();
+		create_descriptor_sets();
 		create_sync_objects();
 	}
 
@@ -488,7 +507,7 @@ class Application
 	auto create_swapchain() -> void
 	{
 		auto format = choose_swapchain_surface_format(_swapchain_details.formats);
-		auto present_mode = vk::PresentModeKHR::eFifo;
+		auto present_mode = vk::PresentModeKHR::eMailbox;
 		auto extent = choose_swapchain_extent(_swapchain_details.capabilities);
 		auto min_image_count = _swapchain_details.capabilities.minImageCount;
 		auto max_image_count = _swapchain_details.capabilities.maxImageCount;
@@ -590,6 +609,24 @@ class Application
 		}
 	}
 
+	auto create_descriptor_set_layout() -> void
+	{
+		auto binding = vk::DescriptorSetLayoutBinding{
+				.binding = 0,
+				.descriptorType = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eVertex,
+				.pImmutableSamplers = VK_NULL_HANDLE,
+		};
+		auto layout_ci = vk::DescriptorSetLayoutCreateInfo{
+				.bindingCount = 1,
+				.pBindings = &binding,
+		};
+		_descriptor_set_layout = check(
+				_device->createDescriptorSetLayoutUnique(layout_ci),
+				"Failed to create a descriptor set layout.");
+	}
+
 	auto create_graphics_pipeline() -> void
 	{
 		auto vert_shader_code = read_file("shaders/shader.vert.spv");
@@ -646,7 +683,7 @@ class Application
 				.rasterizerDiscardEnable = VK_FALSE,
 				.polygonMode = vk::PolygonMode::eFill,
 				.cullMode = vk::CullModeFlagBits::eBack,
-				.frontFace = vk::FrontFace::eClockwise,
+				.frontFace = vk::FrontFace::eCounterClockwise,
 				.depthBiasEnable = VK_FALSE,
 				.depthBiasConstantFactor = 0,
 				.depthBiasClamp = 0,
@@ -684,8 +721,8 @@ class Application
 		};
 
 		auto pipeline_layout_ci = vk::PipelineLayoutCreateInfo{
-				.setLayoutCount = 0,
-				.pSetLayouts = VK_NULL_HANDLE,
+				.setLayoutCount = 1,
+				.pSetLayouts = &_descriptor_set_layout.get(),
 				.pushConstantRangeCount = 0,
 				.pPushConstantRanges = VK_NULL_HANDLE,
 		};
@@ -826,6 +863,22 @@ class Application
 		copy_buffer(stage.buffer.get(), _index_buffer.buffer.get(), size);
 	}
 
+	auto create_uniform_buffer() -> void
+	{
+		auto size = sizeof(UniformBufferObject);
+		_uniform_buffer = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eUniformBuffer,
+				vk::MemoryPropertyFlagBits::eHostVisible |
+						vk::MemoryPropertyFlagBits::eHostCoherent);
+		check(_device->mapMemory(
+				_uniform_buffer.memory.get(),
+				0,
+				size,
+				vk::MemoryMapFlags{},
+				&_uniform_data));
+	};
+
 	auto create_buffer(
 			vk::DeviceSize size,
 			vk::BufferUsageFlags flags,
@@ -907,6 +960,51 @@ class Application
 		check(_graphics_queue.waitIdle());
 	}
 
+	auto create_descriptor_pool() -> void
+	{
+		auto pool_size = vk::DescriptorPoolSize{
+				.type = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = 1,
+		};
+		auto pool_ci = vk::DescriptorPoolCreateInfo{
+				.maxSets = 1,
+				.poolSizeCount = 1,
+				.pPoolSizes = &pool_size,
+		};
+		_descriptor_pool = check(
+				_device->createDescriptorPoolUnique(pool_ci),
+				"Failed to create a descriptor pool.");
+	}
+
+	auto create_descriptor_sets() -> void
+	{
+		auto alloc_info = vk::DescriptorSetAllocateInfo{
+				.descriptorPool = _descriptor_pool.get(),
+				.descriptorSetCount = 1,
+				.pSetLayouts = &_descriptor_set_layout.get(),
+		};
+		auto sets = check(
+				_device->allocateDescriptorSets(alloc_info),
+				"Failed to allocate descriptor sets.");
+		_descriptor_set = move(sets[0]);
+		auto buffer_info = vk::DescriptorBufferInfo{
+				.buffer = _uniform_buffer.buffer.get(),
+				.offset = 0,
+				.range = sizeof(UniformBufferObject),
+		};
+		auto descriptor_write = vk::WriteDescriptorSet{
+				.dstSet = _descriptor_set,
+				.dstBinding = 0,
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = vk::DescriptorType::eUniformBuffer,
+				.pImageInfo = VK_NULL_HANDLE,
+				.pBufferInfo = &buffer_info,
+				.pTexelBufferView = VK_NULL_HANDLE,
+		};
+		_device->updateDescriptorSets(1, &descriptor_write, 0, VK_NULL_HANDLE);
+	}
+
 	auto create_sync_objects() -> void
 	{
 		auto semaphore_ci = vk::SemaphoreCreateInfo{};
@@ -947,6 +1045,7 @@ class Application
 		check(
 				_device->waitForFences(_render_done_fence.get(), VK_TRUE, UINT64_MAX));
 		check(_device->resetFences(1, &_render_done_fence.get()));
+		update_uniform();
 		auto image_index = check(
 				_device->acquireNextImageKHR(
 						_swapchain.get(),
@@ -982,6 +1081,30 @@ class Application
 				.pResults = VK_NULL_HANDLE,
 		};
 		check(_present_queue.presentKHR(present_info));
+	}
+
+	auto update_uniform() -> void
+	{
+		static auto start = glfwGetTime();
+		auto now = glfwGetTime();
+		auto time = now - start;
+		auto ubo = UniformBufferObject{
+				.model = glm::rotate(
+						glm::mat4{1.0f},
+						(float)time * glm::radians(90.0f),
+						glm::vec3{0.0f, 0.0f, 1.0f}),
+				.view = glm::lookAt(
+						glm::vec3{2.0f, 2.0f, 2.0f},
+						glm::vec3{0.0f, 0.0f, 0.0f},
+						glm::vec3{0.0f, 0.0f, 1.0f}),
+				.proj = glm::perspective(
+						glm::radians(45.0f),
+						(float)_swapchain_extent.width / _swapchain_extent.height,
+						0.1f,
+						10.0f),
+		};
+		ubo.proj[1][1] *= -1;
+		memcpy(_uniform_data, &ubo, sizeof(ubo));
 	}
 
 	auto record_command_buffer(
@@ -1069,6 +1192,14 @@ class Application
 				_index_buffer.buffer.get(),
 				0,
 				vk::IndexType::eUint16);
+		buffer.bindDescriptorSets(
+				vk::PipelineBindPoint::eGraphics,
+				_pipeline_layout.get(),
+				0,
+				1,
+				&_descriptor_set,
+				0,
+				VK_NULL_HANDLE);
 		buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
 		buffer.endRendering();
 		buffer.pipelineBarrier(
