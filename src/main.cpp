@@ -439,8 +439,7 @@ class Application
 		auto extent = choose_swapchain_extent(_swapchain_details.capabilities);
 		auto min_image_count = _swapchain_details.capabilities.minImageCount;
 		auto max_image_count = _swapchain_details.capabilities.maxImageCount;
-		max_image_count =
-				max_image_count == 0 ? min_image_count + 1 : max_image_count;
+		max_image_count = max_image_count == 0 ? UINT32_MAX : max_image_count;
 		auto image_count = uint32_t{2};
 		image_count = clamp(image_count, min_image_count, max_image_count);
 		auto indices = array<uint32_t, 2>{
@@ -767,6 +766,7 @@ class Application
 				_in_flight_locks[current_frame].get(),
 				VK_TRUE,
 				UINT64_MAX));
+		check(_device->resetFences(1, &_in_flight_locks[current_frame].get()));
 		auto image_index = check(
 				_device->acquireNextImageKHR(
 						_swapchain.get(),
@@ -774,7 +774,6 @@ class Application
 						_image_locks[current_frame].get(),
 						VK_NULL_HANDLE),
 				"Failed to acquire next image.");
-		check(_device->resetFences(1, &_in_flight_locks[current_frame].get()));
 		check(_command_buffers[current_frame]->reset());
 		record_command_buffer(_command_buffers[current_frame].get(), image_index);
 		auto signal_semaphores =

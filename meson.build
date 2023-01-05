@@ -43,6 +43,7 @@ dependencies = [
   cmake.subproject('fmt').dependency('fmt'),
   cmake.subproject('Vulkan-Headers').dependency('Vulkan-Headers'),
   cmake.subproject('glfw', options: glfw_opts).dependency('glfw'),
+  cmake.subproject('glm').dependency('glm'),
 ]
 
 out = executable(
