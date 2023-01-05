@@ -37,7 +37,6 @@ using std::filesystem::path;
 auto const window_width = 800;
 auto const window_height = 600;
 auto const application_name = "vkdemo";
-auto const max_frames_in_flight = 2;
 auto const validation_layers =
 		array<char const*, 1>{"VK_LAYER_KHRONOS_validation"};
 auto const device_extensions =
@@ -236,12 +235,11 @@ class Application
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
-	vector<vk::UniqueCommandBuffer> _command_buffers;
+	vk::UniqueCommandBuffer _command_buffer;
 	BufferMemory _vertex_buffer;
-	vector<vk::UniqueSemaphore> _image_locks;
-	vector<vk::UniqueSemaphore> _render_locks;
-	vector<vk::UniqueFence> _in_flight_locks;
-	uint32_t current_frame = 0;
+	vk::UniqueSemaphore _image_free;
+	vk::UniqueSemaphore _render_done_sem;
+	vk::UniqueFence _render_done_fence;
 
 	auto init_window() -> void
 	{
@@ -765,11 +763,12 @@ class Application
 		auto command_buffer_ai = vk::CommandBufferAllocateInfo{
 				.commandPool = _command_pool.get(),
 				.level = vk::CommandBufferLevel::ePrimary,
-				.commandBufferCount = max_frames_in_flight,
+				.commandBufferCount = 1,
 		};
-		_command_buffers = check(
+		auto buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
 				"Failed to allocate command buffers.");
+		_command_buffer = move(buffers[0]);
 	}
 
 	auto create_vertex_buffer() -> void
@@ -890,20 +889,15 @@ class Application
 		auto fence_ci = vk::FenceCreateInfo{
 				.flags = vk::FenceCreateFlagBits::eSignaled,
 		};
-		_image_locks.resize(max_frames_in_flight);
-		_render_locks.resize(max_frames_in_flight);
-		_in_flight_locks.resize(max_frames_in_flight);
-		for (auto i = size_t{}; i < max_frames_in_flight; ++i) {
-			_image_locks[i] = check(
-					_device->createSemaphoreUnique(semaphore_ci),
-					"Failed to create an image semaphore.");
-			_render_locks[i] = check(
-					_device->createSemaphoreUnique(semaphore_ci),
-					"Failed to create an image semaphore.");
-			_in_flight_locks[i] = check(
-					_device->createFenceUnique(fence_ci),
-					"Failed to create a frame fence.");
-		}
+		_image_free = check(
+				_device->createSemaphoreUnique(semaphore_ci),
+				"Failed to create an image semaphore.");
+		_render_done_sem = check(
+				_device->createSemaphoreUnique(semaphore_ci),
+				"Failed to create an image semaphore.");
+		_render_done_fence = check(
+				_device->createFenceUnique(fence_ci),
+				"Failed to create a frame fence.");
 	}
 
 	auto loop() -> void
@@ -926,24 +920,20 @@ class Application
 
 	auto draw_frame() -> void
 	{
-		check(_device->waitForFences(
-				_in_flight_locks[current_frame].get(),
-				VK_TRUE,
-				UINT64_MAX));
-		check(_device->resetFences(1, &_in_flight_locks[current_frame].get()));
+		check(
+				_device->waitForFences(_render_done_fence.get(), VK_TRUE, UINT64_MAX));
+		check(_device->resetFences(1, &_render_done_fence.get()));
 		auto image_index = check(
 				_device->acquireNextImageKHR(
 						_swapchain.get(),
 						UINT64_MAX,
-						_image_locks[current_frame].get(),
+						_image_free.get(),
 						VK_NULL_HANDLE),
 				"Failed to acquire next image.");
-		check(_command_buffers[current_frame]->reset());
-		record_command_buffer(_command_buffers[current_frame].get(), image_index);
-		auto signal_semaphores =
-				array<vk::Semaphore, 1>{_render_locks[current_frame].get()};
-		auto wait_semaphores =
-				array<vk::Semaphore, 1>{_image_locks[current_frame].get()};
+		check(_command_buffer->reset());
+		record_command_buffer(_command_buffer.get(), image_index);
+		auto signal_semaphores = array<vk::Semaphore, 1>{_render_done_sem.get()};
+		auto wait_semaphores = array<vk::Semaphore, 1>{_image_free.get()};
 		auto wait_staged = array<vk::PipelineStageFlags, 1>{
 				vk::PipelineStageFlagBits::eColorAttachmentOutput};
 		auto submit_info = vk::SubmitInfo{
@@ -951,13 +941,12 @@ class Application
 				.pWaitSemaphores = wait_semaphores.data(),
 				.pWaitDstStageMask = wait_staged.data(),
 				.commandBufferCount = 1,
-				.pCommandBuffers = &_command_buffers[current_frame].get(),
+				.pCommandBuffers = &_command_buffer.get(),
 				.signalSemaphoreCount = signal_semaphores.size(),
 				.pSignalSemaphores = signal_semaphores.data(),
 		};
 		check(
-				_graphics_queue
-						.submit(1, &submit_info, _in_flight_locks[current_frame].get()),
+				_graphics_queue.submit(1, &submit_info, _render_done_fence.get()),
 				"Failed to submit a draw command buffer.");
 		auto swapchains = array<vk::SwapchainKHR, 1>{_swapchain.get()};
 		auto present_info = vk::PresentInfoKHR{
@@ -969,7 +958,6 @@ class Application
 				.pResults = VK_NULL_HANDLE,
 		};
 		check(_present_queue.presentKHR(present_info));
-		current_frame = (current_frame + 1) % max_frames_in_flight;
 	}
 
 	auto record_command_buffer(
