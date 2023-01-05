@@ -880,30 +880,24 @@ class Application
 			vk::Buffer const& dst,
 			vk::DeviceSize size) -> void
 	{
-		auto alloc_info = vk::CommandBufferAllocateInfo{
-				.commandPool = _command_pool.get(),
-				.level = vk::CommandBufferLevel::ePrimary,
-				.commandBufferCount = 1,
-		};
-		auto cmd_buffers = check(_device->allocateCommandBuffersUnique(alloc_info));
-		auto buffer = move(cmd_buffers[0]);
 		auto begin_info = vk::CommandBufferBeginInfo{
 				.pInheritanceInfo = VK_NULL_HANDLE,
 		};
-		check(buffer->begin(begin_info));
+		check(_command_buffer->reset());
+		check(_command_buffer->begin(begin_info));
 		auto copy = vk::BufferCopy{
 				.srcOffset = 0,
 				.dstOffset = 0,
 				.size = size,
 		};
-		buffer->copyBuffer(src, dst, 1, &copy);
-		check(buffer->end());
+		_command_buffer->copyBuffer(src, dst, 1, &copy);
+		check(_command_buffer->end());
 		auto submit_info = vk::SubmitInfo{
 				.waitSemaphoreCount = 0,
 				.pWaitSemaphores = VK_NULL_HANDLE,
 				.pWaitDstStageMask = VK_NULL_HANDLE,
 				.commandBufferCount = 1,
-				.pCommandBuffers = &buffer.get(),
+				.pCommandBuffers = &_command_buffer.get(),
 				.signalSemaphoreCount = 0,
 				.pSignalSemaphores = VK_NULL_HANDLE,
 		};
