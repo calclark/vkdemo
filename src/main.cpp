@@ -15,6 +15,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <glm/glm.hpp>
 #include <optional>
 #include <span>
 #include <utility>
@@ -123,6 +124,46 @@ class SwapChainSupportDetails
 	vector<vk::PresentModeKHR> present_modes;
 };
 
+class Vertex
+{
+ public:
+	glm::vec2 position;
+	glm::vec3 color;
+
+	static auto binding_description() -> vk::VertexInputBindingDescription
+	{
+		return vk::VertexInputBindingDescription{
+				.binding = 0,
+				.stride = sizeof(Vertex),
+				.inputRate = vk::VertexInputRate::eVertex,
+		};
+	}
+
+	static auto attribute_descriptions()
+			-> array<vk::VertexInputAttributeDescription, 2>
+	{
+		return array<vk::VertexInputAttributeDescription, 2>{
+				vk::VertexInputAttributeDescription{
+						.location = 0,
+						.binding = 0,
+						.format = vk::Format::eR32G32Sfloat,
+						.offset = offsetof(Vertex, position),
+				},
+				vk::VertexInputAttributeDescription{
+						.location = 1,
+						.binding = 0,
+						.format = vk::Format::eR32G32B32Sfloat,
+						.offset = offsetof(Vertex, color),
+				},
+		};
+	}
+};
+
+auto const vertices = array<Vertex, 3>{
+		Vertex{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		Vertex{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+		Vertex{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
 class GLFWWrapper
 {
  public:
@@ -189,6 +230,8 @@ class Application
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
 	vector<vk::UniqueCommandBuffer> _command_buffers;
+	vk::UniqueBuffer _vertex_buffer;
+	vk::UniqueDeviceMemory _vertex_buffer_memory;
 	vector<vk::UniqueSemaphore> _image_locks;
 	vector<vk::UniqueSemaphore> _render_locks;
 	vector<vk::UniqueFence> _in_flight_locks;
@@ -220,6 +263,7 @@ class Application
 		create_graphics_pipeline();
 		create_command_pool();
 		create_command_buffers();
+		create_vertex_buffer();
 		create_sync_objects();
 	}
 
@@ -551,11 +595,13 @@ class Application
 						frag_shader_module.get(),
 						vk::ShaderStageFlagBits::eFragment)};
 
+		auto vertex_binding_description = Vertex::binding_description();
+		auto vertex_attribute_descriptions = Vertex::attribute_descriptions();
 		auto vertex_input_ci = vk::PipelineVertexInputStateCreateInfo{
-				.vertexBindingDescriptionCount = 0,
-				.pVertexBindingDescriptions = VK_NULL_HANDLE,
-				.vertexAttributeDescriptionCount = 0,
-				.pVertexAttributeDescriptions = VK_NULL_HANDLE,
+				.vertexBindingDescriptionCount = 1,
+				.pVertexBindingDescriptions = &vertex_binding_description,
+				.vertexAttributeDescriptionCount = vertex_attribute_descriptions.size(),
+				.pVertexAttributeDescriptions = vertex_attribute_descriptions.data(),
 		};
 
 		auto input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo{
@@ -718,6 +764,63 @@ class Application
 		_command_buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
 				"Failed to allocate command buffers.");
+	}
+
+	auto create_vertex_buffer() -> void
+	{
+		auto buffer_ci = vk::BufferCreateInfo{
+				.size = sizeof(Vertex) * vertices.size(),
+				.usage = vk::BufferUsageFlagBits::eVertexBuffer,
+				.sharingMode = vk::SharingMode::eExclusive,
+				.queueFamilyIndexCount = 0,
+				.pQueueFamilyIndices = VK_NULL_HANDLE,
+		};
+		_vertex_buffer = check(
+				_device->createBufferUnique(buffer_ci),
+				"Failed to create a vertex buffer.");
+
+		auto memory_requirements =
+				_device->getBufferMemoryRequirements(_vertex_buffer.get());
+		auto allocate_info = vk::MemoryAllocateInfo{
+				.allocationSize = memory_requirements.size,
+				.memoryTypeIndex = find_memory_type(
+						memory_requirements.memoryTypeBits,
+						vk::MemoryPropertyFlagBits::eHostVisible |
+								vk::MemoryPropertyFlagBits::eHostCoherent),
+		};
+		_vertex_buffer_memory = check(
+				_device->allocateMemoryUnique(allocate_info),
+				"Failed to allocate vertex buffer memory.");
+		check(_device->bindBufferMemory(
+				_vertex_buffer.get(),
+				_vertex_buffer_memory.get(),
+				0));
+
+		void* data = nullptr;
+		check(_device->mapMemory(
+				_vertex_buffer_memory.get(),
+				0,
+				buffer_ci.size,
+				vk::MemoryMapFlags{},
+				&data));
+		memcpy(data, vertices.data(), buffer_ci.size);
+		_device->unmapMemory(_vertex_buffer_memory.get());
+	}
+
+	auto find_memory_type(
+			uint32_t type_filter,
+			vk::MemoryPropertyFlags const& properties) -> uint32_t
+	{
+		auto memory_properties = _physical_device.getMemoryProperties();
+		for (auto i = uint32_t{0}; i < memory_properties.memoryTypeCount; i++) {
+			if (((type_filter & (1 << i)) != 0u) &&
+					(memory_properties.memoryTypes[i].propertyFlags & properties) ==
+							properties) {
+				return i;
+			}
+		}
+		fail("Failed to find a suitable memory type.");
+		return 0;  // unreachable
 	}
 
 	auto create_sync_objects() -> void
@@ -888,6 +991,7 @@ class Application
 		buffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
 				_graphics_pipeline.get());
+		buffer.bindVertexBuffers(0, _vertex_buffer.get(), 0ul);
 		buffer.draw(3, 1, 0, 0);
 		buffer.endRendering();
 		buffer.pipelineBarrier(
