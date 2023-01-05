@@ -40,6 +40,7 @@ using std::filesystem::path;
 auto const window_width = 800;
 auto const window_height = 600;
 auto const application_name = "vkdemo";
+auto const lookahead_frames = 2;
 auto const validation_layers =
 		array<char const*, 1>{"VK_LAYER_KHRONOS_validation"};
 auto const device_extensions =
@@ -230,6 +231,7 @@ class Application
  private:
 	bool _layers_enabled;
 	vk::PresentModeKHR _present_mode;
+	uint32_t _current_frame{};
 	GLFWWrapper& _glfw = GLFWWrapper::instance();
 	GLFWwindow* _window = nullptr;
 	vk::DynamicLoader _loader{};
@@ -250,15 +252,15 @@ class Application
 	vk::UniquePipelineLayout _pipeline_layout;
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
-	vk::UniqueCommandBuffer _command_buffer;
+	vector<vk::UniqueCommandBuffer> _command_buffers;
 	BufferMemory _vertex_buffer;
 	BufferMemory _index_buffer;
-	BufferMemory _uniform_buffer;
-	void* _uniform_data{};
+	array<BufferMemory, lookahead_frames> _uniform_buffers;
+	array<void*, lookahead_frames> _uniform_data{};
 	vk::UniqueDescriptorPool _descriptor_pool;
-	vk::DescriptorSet _descriptor_set;
-	vk::UniqueSemaphore _image_free;
-	vk::UniqueSemaphore _render_done_sem;
+	vector<vk::DescriptorSet> _descriptor_sets;
+	array<vk::UniqueSemaphore, lookahead_frames> _image_free_sems;
+	array<vk::UniqueSemaphore, lookahead_frames> _render_done_sems;
 	vk::UniqueFence _render_done_fence;
 
 	auto init_window() -> void
@@ -800,12 +802,11 @@ class Application
 		auto command_buffer_ai = vk::CommandBufferAllocateInfo{
 				.commandPool = _command_pool.get(),
 				.level = vk::CommandBufferLevel::ePrimary,
-				.commandBufferCount = 1,
+				.commandBufferCount = lookahead_frames,
 		};
-		auto buffers = check(
+		_command_buffers = check(
 				_device->allocateCommandBuffersUnique(command_buffer_ai),
 				"Failed to allocate command buffers.");
-		_command_buffer = std::move(buffers[0]);
 	}
 
 	auto create_vertex_buffer() -> void
@@ -861,17 +862,19 @@ class Application
 	auto create_uniform_buffer() -> void
 	{
 		auto size = sizeof(UniformBufferObject);
-		_uniform_buffer = create_buffer(
-				size,
-				vk::BufferUsageFlagBits::eUniformBuffer,
-				vk::MemoryPropertyFlagBits::eHostVisible |
-						vk::MemoryPropertyFlagBits::eHostCoherent);
-		check(_device->mapMemory(
-				_uniform_buffer.memory.get(),
-				0,
-				size,
-				vk::MemoryMapFlags{},
-				&_uniform_data));
+		for (auto i = 0; i < lookahead_frames; ++i) {
+			_uniform_buffers[i] = create_buffer(
+					size,
+					vk::BufferUsageFlagBits::eUniformBuffer,
+					vk::MemoryPropertyFlagBits::eHostVisible |
+							vk::MemoryPropertyFlagBits::eHostCoherent);
+			check(_device->mapMemory(
+					_uniform_buffers[i].memory.get(),
+					0,
+					size,
+					vk::MemoryMapFlags{},
+					&_uniform_data[i]));
+		}
 	};
 
 	auto create_buffer(
@@ -931,21 +934,22 @@ class Application
 		auto begin_info = vk::CommandBufferBeginInfo{
 				.pInheritanceInfo = VK_NULL_HANDLE,
 		};
-		check(_command_buffer->reset());
-		check(_command_buffer->begin(begin_info));
+		auto& buffer = _command_buffers[0];
+		check(buffer->reset());
+		check(buffer->begin(begin_info));
 		auto copy = vk::BufferCopy{
 				.srcOffset = 0,
 				.dstOffset = 0,
 				.size = size,
 		};
-		_command_buffer->copyBuffer(src, dst, 1, &copy);
-		check(_command_buffer->end());
+		buffer->copyBuffer(src, dst, 1, &copy);
+		check(buffer->end());
 		auto submit_info = vk::SubmitInfo{
 				.waitSemaphoreCount = 0,
 				.pWaitSemaphores = VK_NULL_HANDLE,
 				.pWaitDstStageMask = VK_NULL_HANDLE,
 				.commandBufferCount = 1,
-				.pCommandBuffers = &_command_buffer.get(),
+				.pCommandBuffers = &buffer.get(),
 				.signalSemaphoreCount = 0,
 				.pSignalSemaphores = VK_NULL_HANDLE,
 		};
@@ -959,10 +963,10 @@ class Application
 	{
 		auto pool_size = vk::DescriptorPoolSize{
 				.type = vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
+				.descriptorCount = lookahead_frames,
 		};
 		auto pool_ci = vk::DescriptorPoolCreateInfo{
-				.maxSets = 1,
+				.maxSets = lookahead_frames,
 				.poolSizeCount = 1,
 				.pPoolSizes = &pool_size,
 		};
@@ -973,31 +977,35 @@ class Application
 
 	auto create_descriptor_sets() -> void
 	{
+		auto layouts = vector<vk::DescriptorSetLayout>(
+				lookahead_frames,
+				_descriptor_set_layout.get());
 		auto alloc_info = vk::DescriptorSetAllocateInfo{
 				.descriptorPool = _descriptor_pool.get(),
-				.descriptorSetCount = 1,
-				.pSetLayouts = &_descriptor_set_layout.get(),
+				.descriptorSetCount = lookahead_frames,
+				.pSetLayouts = layouts.data(),
 		};
-		auto sets = check(
+		_descriptor_sets = check(
 				_device->allocateDescriptorSets(alloc_info),
 				"Failed to allocate descriptor sets.");
-		_descriptor_set = sets[0];
-		auto buffer_info = vk::DescriptorBufferInfo{
-				.buffer = _uniform_buffer.buffer.get(),
-				.offset = 0,
-				.range = sizeof(UniformBufferObject),
-		};
-		auto descriptor_write = vk::WriteDescriptorSet{
-				.dstSet = _descriptor_set,
-				.dstBinding = 0,
-				.dstArrayElement = 0,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eUniformBuffer,
-				.pImageInfo = VK_NULL_HANDLE,
-				.pBufferInfo = &buffer_info,
-				.pTexelBufferView = VK_NULL_HANDLE,
-		};
-		_device->updateDescriptorSets(1, &descriptor_write, 0, VK_NULL_HANDLE);
+		for (auto i = 0; i < lookahead_frames; ++i) {
+			auto buffer_info = vk::DescriptorBufferInfo{
+					.buffer = _uniform_buffers[i].buffer.get(),
+					.offset = 0,
+					.range = sizeof(UniformBufferObject),
+			};
+			auto descriptor_write = vk::WriteDescriptorSet{
+					.dstSet = _descriptor_sets[i],
+					.dstBinding = 0,
+					.dstArrayElement = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eUniformBuffer,
+					.pImageInfo = VK_NULL_HANDLE,
+					.pBufferInfo = &buffer_info,
+					.pTexelBufferView = VK_NULL_HANDLE,
+			};
+			_device->updateDescriptorSets(1, &descriptor_write, 0, VK_NULL_HANDLE);
+		}
 	}
 
 	auto create_sync_objects() -> void
@@ -1006,15 +1014,17 @@ class Application
 		auto fence_ci = vk::FenceCreateInfo{
 				.flags = vk::FenceCreateFlagBits::eSignaled,
 		};
-		_image_free = check(
-				_device->createSemaphoreUnique(semaphore_ci),
-				"Failed to create an image semaphore.");
-		_render_done_sem = check(
-				_device->createSemaphoreUnique(semaphore_ci),
-				"Failed to create an image semaphore.");
 		_render_done_fence = check(
 				_device->createFenceUnique(fence_ci),
 				"Failed to create a frame fence.");
+		for (auto i = 0; i < lookahead_frames; ++i) {
+			_image_free_sems[i] = check(
+					_device->createSemaphoreUnique(semaphore_ci),
+					"Failed to create an image semaphore.");
+			_render_done_sems[i] = check(
+					_device->createSemaphoreUnique(semaphore_ci),
+					"Failed to create an image semaphore.");
+		}
 	}
 
 	auto loop() -> void
@@ -1037,21 +1047,20 @@ class Application
 
 	auto draw_frame() -> void
 	{
-		check(
-				_device->waitForFences(_render_done_fence.get(), VK_TRUE, UINT64_MAX));
-		check(_device->resetFences(1, &_render_done_fence.get()));
-		update_uniform();
+		update_uniform(_current_frame);
 		auto image_index = check(
 				_device->acquireNextImageKHR(
 						_swapchain.get(),
 						UINT64_MAX,
-						_image_free.get(),
+						_image_free_sems[_current_frame].get(),
 						VK_NULL_HANDLE),
 				"Failed to acquire next image.");
-		check(_command_buffer->reset());
-		record_command_buffer(_command_buffer.get(), image_index);
-		auto signal_semaphores = array<vk::Semaphore, 1>{_render_done_sem.get()};
-		auto wait_semaphores = array<vk::Semaphore, 1>{_image_free.get()};
+		check(_command_buffers[_current_frame]->reset());
+		record_command_buffer(_command_buffers[_current_frame].get(), image_index);
+		auto signal_semaphores =
+				array<vk::Semaphore, 1>{_render_done_sems[_current_frame].get()};
+		auto wait_semaphores =
+				array<vk::Semaphore, 1>{_image_free_sems[_current_frame].get()};
 		auto wait_staged = array<vk::PipelineStageFlags, 1>{
 				vk::PipelineStageFlagBits::eColorAttachmentOutput};
 		auto submit_info = vk::SubmitInfo{
@@ -1059,10 +1068,13 @@ class Application
 				.pWaitSemaphores = wait_semaphores.data(),
 				.pWaitDstStageMask = wait_staged.data(),
 				.commandBufferCount = 1,
-				.pCommandBuffers = &_command_buffer.get(),
+				.pCommandBuffers = &_command_buffers[_current_frame].get(),
 				.signalSemaphoreCount = signal_semaphores.size(),
 				.pSignalSemaphores = signal_semaphores.data(),
 		};
+		check(
+				_device->waitForFences(_render_done_fence.get(), VK_TRUE, UINT64_MAX));
+		check(_device->resetFences(1, &_render_done_fence.get()));
 		check(
 				_graphics_queue.submit(1, &submit_info, _render_done_fence.get()),
 				"Failed to submit a draw command buffer.");
@@ -1076,9 +1088,10 @@ class Application
 				.pResults = VK_NULL_HANDLE,
 		};
 		check(_present_queue.presentKHR(present_info));
+		_current_frame = (_current_frame + 1) % lookahead_frames;
 	}
 
-	auto update_uniform() -> void
+	auto update_uniform(uint32_t current_frame) -> void
 	{
 		static auto start = glfwGetTime();
 		auto now = glfwGetTime();
@@ -1100,7 +1113,7 @@ class Application
 						10.0f),
 		};
 		ubo.proj[1][1] *= -1;
-		memcpy(_uniform_data, &ubo, sizeof(ubo));
+		memcpy(_uniform_data[current_frame], &ubo, sizeof(ubo));
 	}
 
 	auto record_command_buffer(
@@ -1193,7 +1206,7 @@ class Application
 				_pipeline_layout.get(),
 				0,
 				1,
-				&_descriptor_set,
+				&_descriptor_sets[_current_frame],
 				0,
 				VK_NULL_HANDLE);
 		buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
