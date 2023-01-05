@@ -164,6 +164,13 @@ auto const vertices = array<Vertex, 3>{
 		Vertex{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
 		Vertex{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
+class BufferMemory
+{
+ public:
+	vk::UniqueBuffer buffer;
+	vk::UniqueDeviceMemory memory;
+};
+
 class GLFWWrapper
 {
  public:
@@ -230,8 +237,7 @@ class Application
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
 	vector<vk::UniqueCommandBuffer> _command_buffers;
-	vk::UniqueBuffer _vertex_buffer;
-	vk::UniqueDeviceMemory _vertex_buffer_memory;
+	BufferMemory _vertex_buffer;
 	vector<vk::UniqueSemaphore> _image_locks;
 	vector<vk::UniqueSemaphore> _render_locks;
 	vector<vk::UniqueFence> _in_flight_locks;
@@ -768,43 +774,60 @@ class Application
 
 	auto create_vertex_buffer() -> void
 	{
+		auto size = sizeof(Vertex) * vertices.size();
+		auto stage = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eTransferSrc,
+				vk::MemoryPropertyFlagBits::eHostVisible |
+						vk::MemoryPropertyFlagBits::eHostCoherent);
+		void* data = nullptr;
+		check(_device->mapMemory(
+				stage.memory.get(),
+				0,
+				size,
+				vk::MemoryMapFlags{},
+				&data));
+		memcpy(data, vertices.data(), size);
+		_device->unmapMemory(stage.memory.get());
+		_vertex_buffer = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eVertexBuffer |
+						vk::BufferUsageFlagBits::eTransferDst,
+				vk::MemoryPropertyFlagBits::eDeviceLocal);
+		copy_buffer(stage.buffer.get(), _vertex_buffer.buffer.get(), size);
+	}
+
+	auto create_buffer(
+			vk::DeviceSize size,
+			vk::BufferUsageFlags flags,
+			vk::MemoryPropertyFlags properties) -> BufferMemory
+	{
+		auto buffer_memory = BufferMemory{};
 		auto buffer_ci = vk::BufferCreateInfo{
-				.size = sizeof(Vertex) * vertices.size(),
-				.usage = vk::BufferUsageFlagBits::eVertexBuffer,
+				.size = size,
+				.usage = flags,
 				.sharingMode = vk::SharingMode::eExclusive,
 				.queueFamilyIndexCount = 0,
 				.pQueueFamilyIndices = VK_NULL_HANDLE,
 		};
-		_vertex_buffer = check(
+		buffer_memory.buffer = check(
 				_device->createBufferUnique(buffer_ci),
-				"Failed to create a vertex buffer.");
-
+				"Failed to create a buffer.");
 		auto memory_requirements =
-				_device->getBufferMemoryRequirements(_vertex_buffer.get());
+				_device->getBufferMemoryRequirements(buffer_memory.buffer.get());
 		auto allocate_info = vk::MemoryAllocateInfo{
 				.allocationSize = memory_requirements.size,
-				.memoryTypeIndex = find_memory_type(
-						memory_requirements.memoryTypeBits,
-						vk::MemoryPropertyFlagBits::eHostVisible |
-								vk::MemoryPropertyFlagBits::eHostCoherent),
+				.memoryTypeIndex =
+						find_memory_type(memory_requirements.memoryTypeBits, properties),
 		};
-		_vertex_buffer_memory = check(
+		buffer_memory.memory = check(
 				_device->allocateMemoryUnique(allocate_info),
-				"Failed to allocate vertex buffer memory.");
+				"Failed to allocate buffer memory.");
 		check(_device->bindBufferMemory(
-				_vertex_buffer.get(),
-				_vertex_buffer_memory.get(),
+				buffer_memory.buffer.get(),
+				buffer_memory.memory.get(),
 				0));
-
-		void* data = nullptr;
-		check(_device->mapMemory(
-				_vertex_buffer_memory.get(),
-				0,
-				buffer_ci.size,
-				vk::MemoryMapFlags{},
-				&data));
-		memcpy(data, vertices.data(), buffer_ci.size);
-		_device->unmapMemory(_vertex_buffer_memory.get());
+		return buffer_memory;
 	}
 
 	auto find_memory_type(
@@ -821,6 +844,44 @@ class Application
 		}
 		fail("Failed to find a suitable memory type.");
 		return 0;  // unreachable
+	}
+
+	auto copy_buffer(
+			vk::Buffer const& src,
+			vk::Buffer const& dst,
+			vk::DeviceSize size) -> void
+	{
+		auto alloc_info = vk::CommandBufferAllocateInfo{
+				.commandPool = _command_pool.get(),
+				.level = vk::CommandBufferLevel::ePrimary,
+				.commandBufferCount = 1,
+		};
+		auto cmd_buffers = check(_device->allocateCommandBuffersUnique(alloc_info));
+		auto buffer = move(cmd_buffers[0]);
+		auto begin_info = vk::CommandBufferBeginInfo{
+				.pInheritanceInfo = VK_NULL_HANDLE,
+		};
+		check(buffer->begin(begin_info));
+		auto copy = vk::BufferCopy{
+				.srcOffset = 0,
+				.dstOffset = 0,
+				.size = size,
+		};
+		buffer->copyBuffer(src, dst, 1, &copy);
+		check(buffer->end());
+		auto submit_info = vk::SubmitInfo{
+				.waitSemaphoreCount = 0,
+				.pWaitSemaphores = VK_NULL_HANDLE,
+				.pWaitDstStageMask = VK_NULL_HANDLE,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &buffer.get(),
+				.signalSemaphoreCount = 0,
+				.pSignalSemaphores = VK_NULL_HANDLE,
+		};
+		check(
+				_graphics_queue.submit(1, &submit_info, VK_NULL_HANDLE),
+				"Failed to submit a copy command buffer.");
+		check(_graphics_queue.waitIdle());
 	}
 
 	auto create_sync_objects() -> void
@@ -991,7 +1052,7 @@ class Application
 		buffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
 				_graphics_pipeline.get());
-		buffer.bindVertexBuffers(0, _vertex_buffer.get(), 0ul);
+		buffer.bindVertexBuffers(0, _vertex_buffer.buffer.get(), 0ul);
 		buffer.draw(3, 1, 0, 0);
 		buffer.endRendering();
 		buffer.pipelineBarrier(
