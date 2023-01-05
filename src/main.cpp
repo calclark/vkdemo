@@ -158,10 +158,13 @@ class Vertex
 	}
 };
 
-auto const vertices = array<Vertex, 3>{
-		Vertex{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-		Vertex{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-		Vertex{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+auto const vertices = array<Vertex, 4>{
+		Vertex{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		Vertex{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+		Vertex{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+		Vertex{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+
+auto const indices = array<uint16_t, 6>{0, 1, 2, 2, 3, 0};
 
 class BufferMemory
 {
@@ -237,6 +240,7 @@ class Application
 	vk::UniqueCommandPool _command_pool;
 	vk::UniqueCommandBuffer _command_buffer;
 	BufferMemory _vertex_buffer;
+	BufferMemory _index_buffer;
 	vk::UniqueSemaphore _image_free;
 	vk::UniqueSemaphore _render_done_sem;
 	vk::UniqueFence _render_done_fence;
@@ -268,6 +272,7 @@ class Application
 		create_command_pool();
 		create_command_buffers();
 		create_vertex_buffer();
+		create_index_buffer();
 		create_sync_objects();
 	}
 
@@ -796,6 +801,31 @@ class Application
 		copy_buffer(stage.buffer.get(), _vertex_buffer.buffer.get(), size);
 	}
 
+	auto create_index_buffer() -> void
+	{
+		auto size = sizeof(indices[0]) * indices.size();
+		auto stage = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eTransferSrc,
+				vk::MemoryPropertyFlagBits::eHostVisible |
+						vk::MemoryPropertyFlagBits::eHostCoherent);
+		void* data = nullptr;
+		check(_device->mapMemory(
+				stage.memory.get(),
+				0,
+				size,
+				vk::MemoryMapFlags{},
+				&data));
+		memcpy(data, indices.data(), size);
+		_device->unmapMemory(stage.memory.get());
+		_index_buffer = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eIndexBuffer |
+						vk::BufferUsageFlagBits::eTransferDst,
+				vk::MemoryPropertyFlagBits::eDeviceLocal);
+		copy_buffer(stage.buffer.get(), _index_buffer.buffer.get(), size);
+	}
+
 	auto create_buffer(
 			vk::DeviceSize size,
 			vk::BufferUsageFlags flags,
@@ -1041,7 +1071,11 @@ class Application
 				vk::PipelineBindPoint::eGraphics,
 				_graphics_pipeline.get());
 		buffer.bindVertexBuffers(0, _vertex_buffer.buffer.get(), 0ul);
-		buffer.draw(3, 1, 0, 0);
+		buffer.bindIndexBuffer(
+				_index_buffer.buffer.get(),
+				0,
+				vk::IndexType::eUint16);
+		buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
 		buffer.endRendering();
 		buffer.pipelineBarrier(
 				vk::PipelineStageFlagBits::eColorAttachmentOutput,
