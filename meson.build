@@ -25,6 +25,7 @@ else
 endif
 
 subdir('shaders')
+subdir('textures')
 sources = [
   'src/main.cpp',
 ]

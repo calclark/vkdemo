@@ -3,12 +3,14 @@
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #define GLM_FORCE_EXPLICIT_CTOR
 #define GLM_FORCE_MESSAGES
+#define STB_IMAGE_IMPLEMENTATION
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
 
 #include <fmt/core.h>
 #include <GLFW/glfw3.h>
+#include <stb_image.h>
 
 #include <algorithm>
 #include <array>
@@ -176,6 +178,13 @@ class BufferMemory
 	vk::UniqueDeviceMemory memory;
 };
 
+class ImageMemory
+{
+ public:
+	vk::UniqueImage image;
+	vk::UniqueDeviceMemory memory;
+};
+
 struct UniformBufferObject {
 	glm::mat4 model;
 	glm::mat4 view;
@@ -251,6 +260,7 @@ class Application
 	vk::UniquePipeline _graphics_pipeline;
 	vk::UniqueCommandPool _command_pool;
 	vk::UniqueCommandBuffer _command_buffer;
+	ImageMemory _texture_image;
 	BufferMemory _vertex_buffer;
 	BufferMemory _index_buffer;
 	BufferMemory _uniform_buffer;
@@ -288,6 +298,7 @@ class Application
 		create_graphics_pipeline();
 		create_command_pool();
 		create_command_buffers();
+		create_texture();
 		create_vertex_buffer();
 		create_index_buffer();
 		create_uniform_buffer();
@@ -808,6 +819,233 @@ class Application
 		_command_buffer = std::move(buffers[0]);
 	}
 
+	auto create_texture() -> void
+	{
+		auto width = 0;
+		auto height = 0;
+		auto num_components = 0;
+		auto* pixels = stbi_load(
+				"textures/texture.jpg",
+				&width,
+				&height,
+				&num_components,
+				STBI_rgb_alpha);
+		if (pixels == nullptr) {
+			fail("Failed to read texture.");
+		}
+		auto size = width * height * STBI_rgb_alpha;
+		auto stage = create_buffer(
+				size,
+				vk::BufferUsageFlagBits::eTransferSrc,
+				vk::MemoryPropertyFlagBits::eHostVisible |
+						vk::MemoryPropertyFlagBits::eHostCoherent);
+		void* data = nullptr;
+		check(_device->mapMemory(
+				stage.memory.get(),
+				0,
+				size,
+				vk::MemoryMapFlags{},
+				&data));
+		memcpy(data, pixels, size);
+		_device->unmapMemory(stage.memory.get());
+		stbi_image_free(pixels);
+		_texture_image = create_image(
+				width,
+				height,
+				vk::Format::eR8G8B8A8Srgb,
+				vk::ImageTiling::eOptimal,
+				vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+				vk::MemoryPropertyFlagBits::eDeviceLocal);
+		transition_image_layout(
+				_texture_image.image.get(),
+				vk::ImageLayout::eUndefined,
+				vk::ImageLayout::eTransferDstOptimal);
+		copy_buffer_to_image(
+				stage.buffer.get(),
+				_texture_image.image.get(),
+				width,
+				height);
+		transition_image_layout(
+				_texture_image.image.get(),
+				vk::ImageLayout::eTransferDstOptimal,
+				vk::ImageLayout::eShaderReadOnlyOptimal);
+	}
+
+	auto create_image(
+			uint32_t width,
+			uint32_t height,
+			vk::Format format,
+			vk::ImageTiling tiling,
+			vk::ImageUsageFlags usage,
+			vk::MemoryPropertyFlags properties) -> ImageMemory
+	{
+		auto image_memory = ImageMemory{};
+		auto image_ci = vk::ImageCreateInfo{
+				.imageType = vk::ImageType::e2D,
+				.format = format,
+				.extent =
+						vk::Extent3D{
+								.width = width,
+								.height = height,
+								.depth = 1,
+						},
+				.mipLevels = 1,
+				.arrayLayers = 1,
+				.samples = vk::SampleCountFlagBits::e1,
+				.tiling = tiling,
+				.usage = usage,
+				.sharingMode = vk::SharingMode::eExclusive,
+				.queueFamilyIndexCount = 0,
+				.initialLayout = vk::ImageLayout::eUndefined,
+		};
+		image_memory.image = check(
+				_device->createImageUnique(image_ci),
+				"Failed to create an image.");
+		auto memory_requirements =
+				_device->getImageMemoryRequirements(image_memory.image.get());
+		auto alloc_info = vk::MemoryAllocateInfo{
+				.allocationSize = memory_requirements.size,
+				.memoryTypeIndex =
+						find_memory_type(memory_requirements.memoryTypeBits, properties),
+		};
+		image_memory.memory = check(
+				_device->allocateMemoryUnique(alloc_info),
+				"Failed to allocate image memory.");
+		check(_device->bindImageMemory(
+				image_memory.image.get(),
+				image_memory.memory.get(),
+				0));
+		return image_memory;
+	}
+
+	auto transition_image_layout(
+			vk::Image image,
+			vk::ImageLayout old_layout,
+			vk::ImageLayout new_layout) -> void
+	{
+		auto type = bool{};
+		auto src_stage = vk::PipelineStageFlags{};
+		auto dst_stage = vk::PipelineStageFlags{};
+		if (old_layout == vk::ImageLayout::eUndefined &&
+				new_layout == vk::ImageLayout::eTransferDstOptimal) {
+			type = true;
+			src_stage = vk::PipelineStageFlagBits::eTopOfPipe;
+			dst_stage = vk::PipelineStageFlagBits::eTransfer;
+		} else if (
+				old_layout == vk::ImageLayout::eTransferDstOptimal &&
+				new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+			type = false;
+			src_stage = vk::PipelineStageFlagBits::eTransfer;
+			dst_stage = vk::PipelineStageFlagBits::eFragmentShader;
+		} else {
+			fail("Bad arguments transition_image_layout.");
+		}
+		auto barrier = vk::ImageMemoryBarrier{
+				.srcAccessMask =
+						type ? vk::AccessFlags{} : vk::AccessFlagBits::eTransferWrite,
+				.dstAccessMask =
+						type ? vk::AccessFlagBits::eTransferWrite : vk::AccessFlags{},
+				.oldLayout = old_layout,
+				.newLayout = new_layout,
+				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.image = image,
+				.subresourceRange =
+						vk::ImageSubresourceRange{
+								.aspectMask = vk::ImageAspectFlagBits::eColor,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+						},
+		};
+		auto cmd_begin_info = vk::CommandBufferBeginInfo{
+				.pInheritanceInfo = VK_NULL_HANDLE,
+		};
+		_command_buffer->reset();
+		check(_command_buffer->begin(cmd_begin_info));
+		_command_buffer->pipelineBarrier(
+				src_stage,
+				dst_stage,
+				vk::DependencyFlagBits{},
+				0,
+				nullptr,
+				0,
+				nullptr,
+				1,
+				&barrier);
+		check(_command_buffer->end());
+		auto submit_info = vk::SubmitInfo{
+				.waitSemaphoreCount = 0,
+				.pWaitSemaphores = VK_NULL_HANDLE,
+				.pWaitDstStageMask = VK_NULL_HANDLE,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &_command_buffer.get(),
+				.signalSemaphoreCount = 0,
+				.pSignalSemaphores = VK_NULL_HANDLE,
+		};
+		check(
+				_graphics_queue.submit(1, &submit_info, VK_NULL_HANDLE),
+				"Failed to submit a command buffer.");
+		check(_graphics_queue.waitIdle());
+	}
+
+	auto copy_buffer_to_image(
+			vk::Buffer buffer,
+			vk::Image image,
+			uint32_t width,
+			uint32_t height) -> void
+	{
+		auto spec = vk::BufferImageCopy{
+				.bufferOffset = 0,
+				.bufferRowLength = 0,
+				.bufferImageHeight = 0,
+				.imageSubresource =
+						vk::ImageSubresourceLayers{
+								.aspectMask = vk::ImageAspectFlagBits::eColor,
+								.mipLevel = 0,
+								.baseArrayLayer = 0,
+								.layerCount = 1},
+				.imageOffset =
+						vk::Offset3D{
+								.x = 0,
+								.y = 0,
+								.z = 0,
+						},
+				.imageExtent =
+						vk::Extent3D{
+								.width = width,
+								.height = height,
+								.depth = 1,
+						},
+		};
+		auto cmd_begin_info = vk::CommandBufferBeginInfo{
+				.pInheritanceInfo = VK_NULL_HANDLE,
+		};
+		_command_buffer->reset();
+		check(_command_buffer->begin(cmd_begin_info));
+		_command_buffer->copyBufferToImage(
+				buffer,
+				image,
+				vk::ImageLayout::eTransferDstOptimal,
+				1,
+				&spec);
+		check(_command_buffer->end());
+		auto submit_info = vk::SubmitInfo{
+				.waitSemaphoreCount = 0,
+				.pWaitSemaphores = VK_NULL_HANDLE,
+				.pWaitDstStageMask = VK_NULL_HANDLE,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &_command_buffer.get(),
+				.signalSemaphoreCount = 0,
+				.pSignalSemaphores = VK_NULL_HANDLE,
+		};
+		check(
+				_graphics_queue.submit(1, &submit_info, VK_NULL_HANDLE),
+				"Failed to submit a command buffer.");
+		check(_graphics_queue.waitIdle());
+	}
+
 	auto create_vertex_buffer() -> void
 	{
 		auto size = sizeof(Vertex) * vertices.size();
@@ -1132,13 +1370,13 @@ class Application
 				.pDepthAttachment = {},
 				.pStencilAttachment = {},
 		};
-		auto foo = vk::ImageMemoryBarrier{
+		auto to_attachment = vk::ImageMemoryBarrier{
 				.srcAccessMask = vk::AccessFlagBits::eNone,
 				.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
 				.oldLayout = vk::ImageLayout::eUndefined,
 				.newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-				.srcQueueFamilyIndex = {},
-				.dstQueueFamilyIndex = {},
+				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 				.image = _swapchain_images[image_index],
 				.subresourceRange =
 						vk::ImageSubresourceRange{
@@ -1149,7 +1387,7 @@ class Application
 								.layerCount = 1,
 						},
 		};
-		auto bar = vk::ImageMemoryBarrier{
+		auto to_present = vk::ImageMemoryBarrier{
 				.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
 				.dstAccessMask = vk::AccessFlagBits::eNone,
 				.oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -1178,7 +1416,7 @@ class Application
 				0,
 				nullptr,
 				1,
-				&foo);
+				&to_attachment);
 		buffer.beginRendering(&render_info);
 		buffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
@@ -1207,7 +1445,7 @@ class Application
 				0,
 				nullptr,
 				1,
-				&bar);
+				&to_present);
 		check(buffer.end(), "Failed to record a command buffer.");
 	}
 };
