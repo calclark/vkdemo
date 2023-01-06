@@ -261,6 +261,8 @@ class Application
 	vk::UniqueCommandPool _command_pool;
 	vk::UniqueCommandBuffer _command_buffer;
 	ImageMemory _texture_image;
+	vk::UniqueImageView _texture_image_view;
+	vk::UniqueSampler _texture_sampler;
 	BufferMemory _vertex_buffer;
 	BufferMemory _index_buffer;
 	BufferMemory _uniform_buffer;
@@ -299,6 +301,8 @@ class Application
 		create_command_pool();
 		create_command_buffers();
 		create_texture();
+		create_texture_image_view();
+		create_texture_sampler();
 		create_vertex_buffer();
 		create_index_buffer();
 		create_uniform_buffer();
@@ -435,7 +439,8 @@ class Application
 			SwapChainSupportDetails const& swapchain_details) -> uint8_t
 	{
 		if (!(queue_families.is_complete() && device_extensions_supported(device) &&
-					swapchain_adequate(swapchain_details))) {
+					swapchain_adequate(swapchain_details) &&
+					device_features_supported(device))) {
 			return 0;
 		}
 		auto properties = device.getProperties();
@@ -472,6 +477,12 @@ class Application
 		return !(details.formats.empty() && details.present_modes.empty());
 	}
 
+	auto device_features_supported(vk::PhysicalDevice device) -> bool
+	{
+		auto supported_features = device.getFeatures();
+		return supported_features.samplerAnisotropy == VK_TRUE;
+	}
+
 	auto create_logical_device() -> void
 	{
 		auto queue_priority = 1.0f;
@@ -487,6 +498,7 @@ class Application
 						.pQueuePriorities = &queue_priority,
 				},
 		};
+		auto features = vk::PhysicalDeviceFeatures{.samplerAnisotropy = VK_TRUE};
 		auto device_ci = vk::StructureChain<
 				vk::DeviceCreateInfo,
 				vk::PhysicalDeviceDynamicRenderingFeatures>{
@@ -500,7 +512,7 @@ class Application
 						.ppEnabledLayerNames = VK_NULL_HANDLE,
 						.enabledExtensionCount = device_extensions.size(),
 						.ppEnabledExtensionNames = device_extensions.data(),
-						.pEnabledFeatures = VK_NULL_HANDLE,
+						.pEnabledFeatures = &features,
 				},
 				vk::PhysicalDeviceDynamicRenderingFeatures{
 						.dynamicRendering = VK_TRUE,
@@ -1045,6 +1057,50 @@ class Application
 				"Failed to submit a command buffer.");
 		check(_graphics_queue.waitIdle());
 	}
+
+	auto create_texture_image_view() -> void
+	{
+		auto view_ci = vk::ImageViewCreateInfo{
+				.image = _texture_image.image.get(),
+				.viewType = vk::ImageViewType::e2D,
+				.format = vk::Format::eR8G8B8A8Srgb,
+				.components = vk::ComponentMapping{},
+				.subresourceRange =
+						vk::ImageSubresourceRange{
+								.aspectMask = vk::ImageAspectFlagBits::eColor,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+						},
+		};
+		_texture_image_view = check(_device->createImageViewUnique(view_ci));
+	}
+
+	auto create_texture_sampler() -> void
+	{
+		auto properties = _physical_device.getProperties();
+		auto sampler_ci = vk::SamplerCreateInfo{
+				.magFilter = vk::Filter::eLinear,
+				.minFilter = vk::Filter::eLinear,
+				.mipmapMode = vk::SamplerMipmapMode::eLinear,
+				.addressModeU = vk::SamplerAddressMode::eRepeat,
+				.addressModeV = vk::SamplerAddressMode::eRepeat,
+				.addressModeW = vk::SamplerAddressMode::eRepeat,
+				.mipLodBias = 0.0f,
+				.anisotropyEnable = VK_TRUE,
+				.maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+				.compareEnable = VK_FALSE,
+				.compareOp = vk::CompareOp::eAlways,
+				.minLod = 0.0f,
+				.maxLod = 0.0f,
+				.borderColor = vk::BorderColor::eIntOpaqueBlack,
+				.unnormalizedCoordinates = VK_FALSE,
+		};
+		_texture_sampler = check(
+				_device->createSamplerUnique(sampler_ci),
+				"Failed to create a texture sampler.");
+	};
 
 	auto create_vertex_buffer() -> void
 	{
