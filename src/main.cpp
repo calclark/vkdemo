@@ -133,6 +133,7 @@ class Vertex
  public:
 	glm::vec2 position;
 	glm::vec3 color;
+	glm::vec2 tex_coords;
 
 	static auto binding_description() -> vk::VertexInputBindingDescription
 	{
@@ -144,9 +145,9 @@ class Vertex
 	}
 
 	static auto attribute_descriptions()
-			-> array<vk::VertexInputAttributeDescription, 2>
+			-> array<vk::VertexInputAttributeDescription, 3>
 	{
-		return array<vk::VertexInputAttributeDescription, 2>{
+		return array<vk::VertexInputAttributeDescription, 3>{
 				vk::VertexInputAttributeDescription{
 						.location = 0,
 						.binding = 0,
@@ -159,15 +160,21 @@ class Vertex
 						.format = vk::Format::eR32G32B32Sfloat,
 						.offset = offsetof(Vertex, color),
 				},
+				vk::VertexInputAttributeDescription{
+						.location = 2,
+						.binding = 0,
+						.format = vk::Format::eR32G32Sfloat,
+						.offset = offsetof(Vertex, tex_coords),
+				},
 		};
 	}
 };
 
-auto const vertices = array<Vertex, 4>{
-		Vertex{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-		Vertex{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-		Vertex{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-		Vertex{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+auto const vertices = std::vector<Vertex>{
+		Vertex{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+		Vertex{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+		Vertex{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+		Vertex{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
 
 auto const indices = array<uint16_t, 6>{0, 1, 2, 2, 3, 0};
 
@@ -629,16 +636,25 @@ class Application
 
 	auto create_descriptor_set_layout() -> void
 	{
-		auto binding = vk::DescriptorSetLayoutBinding{
-				.binding = 0,
-				.descriptorType = vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eVertex,
-				.pImmutableSamplers = VK_NULL_HANDLE,
+		auto bindings = array<vk::DescriptorSetLayoutBinding, 2>{
+				vk::DescriptorSetLayoutBinding{
+						.binding = 0,
+						.descriptorType = vk::DescriptorType::eUniformBuffer,
+						.descriptorCount = 1,
+						.stageFlags = vk::ShaderStageFlagBits::eVertex,
+						.pImmutableSamplers = VK_NULL_HANDLE,
+				},
+				vk::DescriptorSetLayoutBinding{
+						.binding = 1,
+						.descriptorType = vk::DescriptorType::eCombinedImageSampler,
+						.descriptorCount = 1,
+						.stageFlags = vk::ShaderStageFlagBits::eFragment,
+						.pImmutableSamplers = VK_NULL_HANDLE,
+				},
 		};
 		auto layout_ci = vk::DescriptorSetLayoutCreateInfo{
-				.bindingCount = 1,
-				.pBindings = &binding,
+				.bindingCount = bindings.size(),
+				.pBindings = bindings.data(),
 		};
 		_descriptor_set_layout = check(
 				_device->createDescriptorSetLayoutUnique(layout_ci),
@@ -1251,14 +1267,20 @@ class Application
 
 	auto create_descriptor_pool() -> void
 	{
-		auto pool_size = vk::DescriptorPoolSize{
-				.type = vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
+		auto pool_sizes = array<vk::DescriptorPoolSize, 2>{
+				vk::DescriptorPoolSize{
+						.type = vk::DescriptorType::eUniformBuffer,
+						.descriptorCount = 1,
+				},
+				vk::DescriptorPoolSize{
+						.type = vk::DescriptorType::eCombinedImageSampler,
+						.descriptorCount = 1,
+				},
 		};
 		auto pool_ci = vk::DescriptorPoolCreateInfo{
 				.maxSets = 1,
-				.poolSizeCount = 1,
-				.pPoolSizes = &pool_size,
+				.poolSizeCount = pool_sizes.size(),
+				.pPoolSizes = pool_sizes.data(),
 		};
 		_descriptor_pool = check(
 				_device->createDescriptorPoolUnique(pool_ci),
@@ -1281,17 +1303,34 @@ class Application
 				.offset = 0,
 				.range = sizeof(UniformBufferObject),
 		};
-		auto descriptor_write = vk::WriteDescriptorSet{
-				.dstSet = _descriptor_set,
-				.dstBinding = 0,
-				.dstArrayElement = 0,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eUniformBuffer,
-				.pImageInfo = VK_NULL_HANDLE,
-				.pBufferInfo = &buffer_info,
-				.pTexelBufferView = VK_NULL_HANDLE,
+		auto image_info = vk::DescriptorImageInfo{
+				.sampler = _texture_sampler.get(),
+				.imageView = _texture_image_view.get(),
+				.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
 		};
-		_device->updateDescriptorSets(1, &descriptor_write, 0, VK_NULL_HANDLE);
+		auto descriptor_writes = array<vk::WriteDescriptorSet, 2>{
+				vk::WriteDescriptorSet{
+						.dstSet = _descriptor_set,
+						.dstBinding = 0,
+						.dstArrayElement = 0,
+						.descriptorCount = 1,
+						.descriptorType = vk::DescriptorType::eUniformBuffer,
+						.pImageInfo = VK_NULL_HANDLE,
+						.pBufferInfo = &buffer_info,
+						.pTexelBufferView = VK_NULL_HANDLE,
+				},
+				vk::WriteDescriptorSet{
+						.dstSet = _descriptor_set,
+						.dstBinding = 1,
+						.dstArrayElement = 0,
+						.descriptorCount = 1,
+						.descriptorType = vk::DescriptorType::eCombinedImageSampler,
+						.pImageInfo = &image_info,
+						.pBufferInfo = VK_NULL_HANDLE,
+						.pTexelBufferView = VK_NULL_HANDLE,
+				},
+		};
+		_device->updateDescriptorSets(descriptor_writes, VK_NULL_HANDLE);
 	}
 
 	auto create_sync_objects() -> void
