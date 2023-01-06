@@ -46,10 +46,15 @@ dependencies = [
   cmake.subproject('glm').dependency('glm'),
 ]
 
+include_directories = [
+  'subprojects/stb',
+]
+
 out = executable(
   'demo',
   sources,
   dependencies: dependencies,
   cpp_args: extra_args,
+  include_directories: include_directories,
 )
 
