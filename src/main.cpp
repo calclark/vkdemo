@@ -4,6 +4,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_EXPLICIT_CTOR
 #define STB_IMAGE_IMPLEMENTATION
+#define TINYOBJLOADER_IMPLEMENTATION
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -11,6 +12,7 @@
 #include <fmt/core.h>
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
+#include <tiny_obj_loader.h>
 
 #include <algorithm>
 #include <array>
@@ -956,7 +958,7 @@ class Application
 		auto height = 0;
 		auto num_components = 0;
 		auto* pixels = stbi_load(
-				"textures/texture.jpg",
+				"assets/texture.jpg",
 				&width,
 				&height,
 				&num_components,

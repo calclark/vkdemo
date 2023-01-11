@@ -25,7 +25,7 @@ else
 endif
 
 subdir('shaders')
-subdir('textures')
+subdir('assets')
 sources = [
   'src/main.cpp',
 ]
@@ -49,6 +49,7 @@ dependencies = [
 
 include_directories = [
   'subprojects/stb',
+  'subprojects/tinyobjloader',
 ]
 
 out = executable(
