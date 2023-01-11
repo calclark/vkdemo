@@ -398,9 +398,12 @@ class Application
 	auto pick_physical_device() -> void
 	{
 		auto devices = check(_instance->enumeratePhysicalDevices());
-		auto best = uint8_t{};
+		auto best = 0;
 		for (auto const& device : devices) {
 			auto queue_families = find_queue_families(device);
+			if (!queue_families.is_complete()) {
+				continue;
+			}
 			auto swapchain_details = swapchain_support(device);
 			auto score =
 					device_suitability(device, queue_families, swapchain_details);
@@ -491,7 +494,7 @@ class Application
 
 	auto swapchain_adequate(SwapChainSupportDetails const& details) -> bool
 	{
-		return !(details.formats.empty() && details.present_modes.empty());
+		return !(details.formats.empty() || details.present_modes.empty());
 	}
 
 	auto device_features_supported(vk::PhysicalDevice device) -> bool
@@ -549,6 +552,7 @@ class Application
 	{
 		auto format = choose_swapchain_surface_format(_swapchain_details.formats);
 		auto extent = choose_swapchain_extent(_swapchain_details.capabilities);
+		choose_swapchain_present_mode(_swapchain_details.present_modes);
 		auto indices = array<uint32_t, 2>{
 				_queue_familes.graphics_family.value(),
 				_queue_familes.present_family.value()};
@@ -613,6 +617,20 @@ class Application
 		};
 		return extent;
 	}
+
+	auto choose_swapchain_present_mode(span<vk::PresentModeKHR> modes) -> void
+	{
+		for (auto mode : modes) {
+			if (mode == _present_mode) {
+				return;
+			}
+		}
+		print(
+				stderr,
+				"WARNING: Requested present mode is unavailable. "
+				"Falling back to FIFO\n");
+		_present_mode = vk::PresentModeKHR::eFifo;
+	};
 
 	auto create_image_views() -> void
 	{
