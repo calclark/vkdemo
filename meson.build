@@ -8,7 +8,7 @@ project(
     'optimization=3',
     'prefer_static=true',
     'warning_level=3',
-    'b_lto=true',
+    'b_lto=false',
     'b_ndebug=true',
     'b_staticpic=false',
     'b_pie=false',
