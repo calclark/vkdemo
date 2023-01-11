@@ -915,14 +915,19 @@ class Application
 
 	auto find_depth_format() -> vk::Format
 	{
-		auto formats = array<vk::Format, 3>{
+		static auto format = optional<vk::Format>{};
+		if (format.has_value()) {
+			return format.value();
+		}
+		auto formats = array<vk::Format, 2>{
 				vk::Format::eD32Sfloat,
-				vk::Format::eD32SfloatS8Uint,
-				vk::Format::eD24UnormS8Uint};
-		return find_supported_format(
+				vk::Format::eD16Unorm,
+		};
+		format = find_supported_format(
 				formats,
 				vk::ImageTiling::eOptimal,
 				vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+		return format.value();
 	}
 
 	auto find_supported_format(
@@ -1556,7 +1561,7 @@ class Application
 				.resolveMode = vk::ResolveModeFlagBits::eNone,
 				.resolveImageLayout = vk::ImageLayout::eUndefined,
 				.loadOp = vk::AttachmentLoadOp::eClear,
-				.storeOp = vk::AttachmentStoreOp::eStore,
+				.storeOp = vk::AttachmentStoreOp::eDontCare,
 				.clearValue = vk::ClearValue{{array<float, 4>{1.0, 0.0, 0.0, 0.0}}},
 		};
 		auto render_info = vk::RenderingInfo{
@@ -1635,8 +1640,7 @@ class Application
 				VK_NULL_HANDLE,
 				color_write_barrier);
 		buffer.pipelineBarrier(
-				vk::PipelineStageFlagBits::eEarlyFragmentTests |
-						vk::PipelineStageFlagBits::eLateFragmentTests,
+				vk::PipelineStageFlagBits::eTopOfPipe,
 				vk::PipelineStageFlagBits::eEarlyFragmentTests |
 						vk::PipelineStageFlagBits::eLateFragmentTests,
 				vk::DependencyFlags{},
