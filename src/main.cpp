@@ -5,6 +5,7 @@
 #define GLM_FORCE_EXPLICIT_CTOR
 #define STB_IMAGE_IMPLEMENTATION
 #define TINYOBJLOADER_IMPLEMENTATION
+#define TINYOBJLOADER_USE_MAPBOX_EARCUT
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
@@ -44,6 +45,8 @@ using std::filesystem::path;
 auto const window_width = 800;
 auto const window_height = 600;
 auto const application_name = "vkdemo";
+auto const model_path = "assets/viking_room/viking_room.obj";
+auto const texture_path = "assets/viking_room/viking_room.png";
 auto const validation_layers =
 		array<char const*, 1>{"VK_LAYER_KHRONOS_validation"};
 auto const device_extensions =
@@ -172,20 +175,6 @@ class Vertex
 	}
 };
 
-auto const vertices = std::vector<Vertex>{
-		Vertex{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-		Vertex{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-		Vertex{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-		Vertex{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-		Vertex{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-		Vertex{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-		Vertex{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-		Vertex{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-};
-
-auto const indices = std::vector<uint16_t>{0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
-
 class BufferMemory
 {
  public:
@@ -280,7 +269,9 @@ class Application
 	ImageMemory _texture_image;
 	vk::UniqueImageView _texture_image_view;
 	vk::UniqueSampler _texture_sampler;
+	vector<Vertex> _vertices;
 	BufferMemory _vertex_buffer;
+	vector<uint32_t> _indices;
 	BufferMemory _index_buffer;
 	BufferMemory _uniform_buffer;
 	void* _uniform_data{};
@@ -321,6 +312,7 @@ class Application
 		create_texture_image();
 		create_texture_image_view();
 		create_texture_sampler();
+		load_model();
 		create_vertex_buffer();
 		create_index_buffer();
 		create_uniform_buffer();
@@ -958,7 +950,7 @@ class Application
 		auto height = 0;
 		auto num_components = 0;
 		auto* pixels = stbi_load(
-				"assets/texture.jpg",
+				texture_path,
 				&width,
 				&height,
 				&num_components,
@@ -1221,11 +1213,45 @@ class Application
 		_texture_sampler = check(
 				_device->createSamplerUnique(sampler_ci),
 				"Failed to create a texture sampler.");
-	};
+	}
+
+	auto load_model() -> void
+	{
+		auto config = tinyobj::ObjReaderConfig{};
+		config.mtl_search_path = "./";
+		auto reader = tinyobj::ObjReader{};
+		if (!reader.ParseFromFile(model_path, config)) {
+			if (!reader.Error().empty()) {
+				fail(reader.Error().c_str());
+			}
+			fail("Failed to read obj file.");
+		}
+		if (!reader.Warning().empty()) {
+			print(stderr, "{}\n", reader.Warning());
+		}
+		auto const& attrib = reader.GetAttrib();
+		auto const& shapes = reader.GetShapes();
+		for (auto const& shape : shapes) {
+			for (auto const& index : shape.mesh.indices) {
+				auto vertex = Vertex{
+						.position =
+								glm::vec3{
+										attrib.vertices[3 * index.vertex_index + 0],
+										attrib.vertices[3 * index.vertex_index + 1],
+										attrib.vertices[3 * index.vertex_index + 2]},
+						.color = glm::vec3{1.0f, 1.0f, 1.0f},
+						.tex_coords = glm::vec2{
+								attrib.texcoords[2 * index.texcoord_index + 0],
+								1.0f - attrib.texcoords[2 * index.texcoord_index + 1]}};
+				_vertices.push_back(vertex);
+				_indices.push_back(_indices.size());
+			}
+		}
+	}
 
 	auto create_vertex_buffer() -> void
 	{
-		auto size = sizeof(Vertex) * vertices.size();
+		auto size = sizeof(Vertex) * _vertices.size();
 		auto stage = create_buffer(
 				size,
 				vk::BufferUsageFlagBits::eTransferSrc,
@@ -1238,7 +1264,7 @@ class Application
 				size,
 				vk::MemoryMapFlags{},
 				&data));
-		memcpy(data, vertices.data(), size);
+		memcpy(data, _vertices.data(), size);
 		_device->unmapMemory(stage.memory.get());
 		_vertex_buffer = create_buffer(
 				size,
@@ -1250,7 +1276,7 @@ class Application
 
 	auto create_index_buffer() -> void
 	{
-		auto size = sizeof(indices[0]) * indices.size();
+		auto size = sizeof(_indices[0]) * _indices.size();
 		auto stage = create_buffer(
 				size,
 				vk::BufferUsageFlagBits::eTransferSrc,
@@ -1263,7 +1289,7 @@ class Application
 				size,
 				vk::MemoryMapFlags{},
 				&data));
-		memcpy(data, indices.data(), size);
+		memcpy(data, _indices.data(), size);
 		_device->unmapMemory(stage.memory.get());
 		_index_buffer = create_buffer(
 				size,
@@ -1657,14 +1683,14 @@ class Application
 		buffer.bindIndexBuffer(
 				_index_buffer.buffer.get(),
 				0,
-				vk::IndexType::eUint16);
+				vk::IndexType::eUint32);
 		buffer.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,
 				_pipeline_layout.get(),
 				0,
 				_descriptor_set,
 				VK_NULL_HANDLE);
-		buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
+		buffer.drawIndexed(_indices.size(), 1, 0, 0, 0);
 		buffer.endRendering();
 		buffer.pipelineBarrier(
 				vk::PipelineStageFlagBits::eColorAttachmentOutput,
