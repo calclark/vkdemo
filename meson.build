@@ -48,8 +48,8 @@ dependencies = [
 ]
 
 include_directories = [
-  'subprojects/stb',
-  'subprojects/tinyobjloader',
+  'include/stb',
+  'include/tinyobjloader',
 ]
 
 out = executable(
