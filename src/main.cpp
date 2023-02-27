@@ -848,6 +848,7 @@ class Application
 	{
 		auto module_ci = vk::ShaderModuleCreateInfo{
 				.codeSize = code.size_bytes(),
+				// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
 				.pCode = reinterpret_cast<uint32_t*>(code.data()),
 		};
 		auto module = check(
