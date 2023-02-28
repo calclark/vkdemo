@@ -4,11 +4,10 @@ project(
   default_options: [
     'buildtype=custom',
     'debug=true',
-    'default_library=static',
     'optimization=3',
     'prefer_static=true',
     'warning_level=3',
-    'b_lto=false',
+    'b_lto=true',
     'b_ndebug=true',
     'b_staticpic=false',
     'b_pie=false',
@@ -18,11 +17,13 @@ project(
   ]
 )
 
-if meson.get_compiler('cpp').get_id() == 'gcc'
-  extra_args = ['-march=native', '-Ofast', '-ggdb3', '-pipe']
-else
-  extra_args = []
-endif
+cxx = meson.get_compiler('cpp')
+extra_args = cxx.get_supported_arguments(
+  '-march=native',
+  '-Ofast',
+  '-ggdb3',
+  '-pipe',
+)
 
 subdir('shaders')
 subdir('assets')
